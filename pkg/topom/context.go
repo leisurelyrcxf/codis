@@ -15,7 +15,7 @@ import (
 	"github.com/CodisLabs/codis/pkg/utils/math2"
 )
 
-const MaxSlotNum = models.MaxSlotNum
+//var MaxSlotNum int = models.MaxSlotNum
 
 type context struct {
 	slots []*models.SlotMapping
@@ -29,13 +29,14 @@ type context struct {
 		m map[string]net.IP
 	}
 	method int
+	config *Config
 }
 
 func (ctx *context) getSlotMapping(sid int) (*models.SlotMapping, error) {
-	if len(ctx.slots) != MaxSlotNum {
-		return nil, errors.Errorf("invalid number of slots = %d/%d", len(ctx.slots), MaxSlotNum)
+	if len(ctx.slots) != ctx.config.MaxSlotNum {
+		return nil, errors.Errorf("invalid number of slots = %d/%d", len(ctx.slots), ctx.config.MaxSlotNum)
 	}
-	if sid >= 0 && sid < MaxSlotNum {
+	if sid >= 0 && sid < ctx.config.MaxSlotNum {
 		return ctx.slots[sid], nil
 	}
 	return nil, errors.Errorf("slot-[%d] doesn't exist", sid)

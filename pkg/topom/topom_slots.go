@@ -108,7 +108,7 @@ func (s *Topom) SlotCreateActionRange(beg, end int, gid int, must bool) error {
 		return err
 	}
 
-	if !(beg >= 0 && beg <= end && end < MaxSlotNum) {
+	if !(beg >= 0 && beg <= end && end < s.config.MaxSlotNum) {
 		return errors.Errorf("invalid slot range [%d,%d]", beg, end)
 	}
 
@@ -581,7 +581,7 @@ func (s *Topom) SlotsRebalance(confirm bool) (map[int]int, error) {
 		}
 	}
 
-	var lowerBound = MaxSlotNum / len(groupIds)
+	var lowerBound = s.config.MaxSlotNum / len(groupIds)
 
 	// don't migrate slot if groupSize < lowerBound
 	for _, m := range ctx.slots {
@@ -629,7 +629,7 @@ func (s *Topom) SlotsRebalance(confirm bool) (map[int]int, error) {
 		tree.Put(dest, nil)
 	}
 
-	var upperBound = (MaxSlotNum + len(groupIds) - 1) / len(groupIds)
+	var upperBound = (s.config.MaxSlotNum + len(groupIds) - 1) / len(groupIds)
 
 	// rebalance between different server groups
 	for tree.Size() >= 2 {

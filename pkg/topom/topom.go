@@ -105,7 +105,7 @@ func New(client models.Client, config *Config) (*Topom, error) {
 	} else {
 		s.model.Sys = strings.TrimSpace(string(b))
 	}
-	s.store = models.NewStore(client, config.ProductName)
+	s.store = models.NewStore(client, config.ProductName, config.MaxSlotNum)
 
 	s.stats.redisp = redis.NewPool(config.ProductAuth, time.Second*5)
 	s.stats.servers = make(map[string]*RedisStats)
@@ -277,6 +277,7 @@ func (s *Topom) newContext() (*context, error) {
 			ctx.sentinel = s.cache.sentinel
 			ctx.hosts.m = make(map[string]net.IP)
 			ctx.method, _ = models.ParseForwardMethod(s.config.MigrationMethod)
+			ctx.config = s.config
 			return ctx, nil
 		}
 	} else {

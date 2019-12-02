@@ -144,11 +144,11 @@ func (t *cmdProxy) handleFillSlots(d map[string]interface{}) {
 		log.PanicErrorf(err, "decode slots from json failed")
 	}
 
-	for _, m := range slots {
-		if m.Id < 0 || m.Id >= models.MaxSlotNum {
-			log.Panicf("invalid slot id = %d", m.Id)
-		}
-	}
+	// for _, m := range slots {
+	// 	if m.Id < 0 || m.Id >= models.MaxSlotNum {
+	// 		log.Panicf("invalid slot id = %d", m.Id)
+	// 	}
+	// }
 
 	if d["--locked"].(bool) {
 		for _, m := range slots {

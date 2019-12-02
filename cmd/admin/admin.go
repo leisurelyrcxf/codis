@@ -16,11 +16,13 @@ import (
 )
 
 type cmdAdmin struct {
-	product string
+	product    string
+	maxSlotNum int
 }
 
 func (t *cmdAdmin) Main(d map[string]interface{}) {
 	t.product, _ = d["--product"].(string)
+	t.maxSlotNum, _ = d["--maxSlotNum"].(int)
 
 	switch {
 	case d["--remove-lock"].(bool):
@@ -78,7 +80,7 @@ func (t *cmdAdmin) newTopomStore(d map[string]interface{}) *models.Store {
 		log.PanicErrorf(err, "invalid product name")
 	}
 	client := t.newTopomClient(d)
-	return models.NewStore(client, t.product)
+	return models.NewStore(client, t.product, t.maxSlotNum)
 }
 
 func (t *cmdAdmin) handleRemoveLock(d map[string]interface{}) {
@@ -265,7 +267,7 @@ func (t *cmdAdmin) handleConfigConvert(d map[string]interface{}) {
 		for _, v := range slots.(map[string]interface{}) {
 			t.convertSlotsV1(temp, v)
 		}
-		for i := 0; i < models.MaxSlotNum; i++ {
+		for i := 0; i < t.maxSlotNum; i++ {
 			if temp[i] == nil {
 				continue
 			}
@@ -333,9 +335,9 @@ func (t *cmdAdmin) loadJsonConfigV3(file string) *ConfigV3 {
 
 	var slots = make(map[int]*models.SlotMapping)
 	for _, s := range config.Slots {
-		if s.Id < 0 || s.Id >= models.MaxSlotNum {
-			log.Panicf("invalid slot id = %d", s.Id)
-		}
+		// if s.Id < 0 || s.Id >= models.MaxSlotNum {
+		// 	log.Panicf("invalid slot id = %d", s.Id)
+		// }
 		if slots[s.Id] != nil {
 			log.Panicf("slot-%04d already exists", s.Id)
 		}

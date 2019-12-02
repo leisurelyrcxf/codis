@@ -25,7 +25,7 @@ import (
 func main() {
 	const usage = `
 Usage:
-	codis-dashboard [--ncpu=N] [--config=CONF] [--log=FILE] [--log-level=LEVEL] [--host-admin=ADDR] [--pidfile=FILE] [--zookeeper=ADDR|--etcd=ADDR|--filesystem=ROOT] [--product_name=NAME] [--product_auth=AUTH] [--remove-lock]
+	codis-dashboard [--ncpu=N] [--config=CONF] [--log=FILE] [--log-level=LEVEL] [--host-admin=ADDR] [--pidfile=FILE] [--zookeeper=ADDR|--etcd=ADDR|--filesystem=ROOT] [--product_name=NAME] [--product_auth=AUTH] [--remove-lock] [--max-slot-num=MAXSLOTNUM]
 	codis-dashboard  --default-config
 	codis-dashboard  --version
 
@@ -87,6 +87,11 @@ Options:
 		config.HostAdmin = s
 		log.Warnf("option --host-admin = %s", s)
 	}
+	if n, ok := utils.ArgumentInteger(d, "--max-slot-num"); ok {
+		config.MaxSlotNum = n
+	} else {
+		config.MaxSlotNum = 1024
+	}
 
 	switch {
 	case d["--zookeeper"] != nil:
@@ -122,7 +127,7 @@ Options:
 	defer client.Close()
 
 	if d["--remove-lock"].(bool) {
-		store := models.NewStore(client, config.ProductName)
+		store := models.NewStore(client, config.ProductName, config.MaxSlotNum)
 		defer store.Close()
 
 		log.Warnf("force remove-lock")

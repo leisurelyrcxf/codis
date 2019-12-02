@@ -71,12 +71,13 @@ func LoadTopom(client Client, product string, must bool) (*Topom, error) {
 }
 
 type Store struct {
-	client  Client
-	product string
+	client     Client
+	product    string
+	maxSlotNum int
 }
 
-func NewStore(client Client, product string) *Store {
-	return &Store{client, product}
+func NewStore(client Client, product string, maxSlotNum int) *Store {
+	return &Store{client, product, maxSlotNum}
 }
 
 func (s *Store) Close() error {
@@ -128,7 +129,7 @@ func (s *Store) LoadTopom(must bool) (*Topom, error) {
 }
 
 func (s *Store) SlotMappings() ([]*SlotMapping, error) {
-	slots := make([]*SlotMapping, MaxSlotNum)
+	slots := make([]*SlotMapping, s.maxSlotNum)
 	for i := range slots {
 		m, err := s.LoadSlotMapping(i, false)
 		if err != nil {

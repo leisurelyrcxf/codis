@@ -31,7 +31,7 @@ import (
 func main() {
 	const usage = `
 Usage:
-	codis-proxy [--ncpu=N [--max-ncpu=MAX]] [--config=CONF] [--log=FILE] [--log-level=LEVEL] [--host-admin=ADDR] [--host-proxy=ADDR] [--dashboard=ADDR|--zookeeper=ADDR [--zookeeper-auth=USR:PWD]|--etcd=ADDR [--etcd-auth=USR:PWD]|--filesystem=ROOT|--fillslots=FILE] [--ulimit=NLIMIT] [--pidfile=FILE] [--product_name=NAME] [--product_auth=AUTH] [--session_auth=AUTH]
+	codis-proxy [--ncpu=N [--max-ncpu=MAX]] [--config=CONF] [--log=FILE] [--log-level=LEVEL] [--host-admin=ADDR] [--host-proxy=ADDR] [--dashboard=ADDR|--zookeeper=ADDR [--zookeeper-auth=USR:PWD]|--etcd=ADDR [--etcd-auth=USR:PWD]|--filesystem=ROOT|--fillslots=FILE] [--ulimit=NLIMIT] [--pidfile=FILE] [--product_name=NAME] [--product_auth=AUTH] [--session_auth=AUTH] [--max-slot-num=MAXSLOTNUM]
 	codis-proxy  --default-config
 	codis-proxy  --version
 
@@ -120,6 +120,11 @@ Options:
 	if s, ok := utils.Argument(d, "--host-proxy"); ok {
 		config.HostProxy = s
 		log.Warnf("option --host-proxy = %s", s)
+	}
+	if n, ok := utils.ArgumentInteger(d, "--max-slot-num"); ok {
+		config.MaxSlotNum = n
+	} else {
+		config.MaxSlotNum = 1024
 	}
 
 	var dashboard string
