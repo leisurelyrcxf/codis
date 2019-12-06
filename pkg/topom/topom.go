@@ -5,6 +5,7 @@ package topom
 
 import (
 	"container/list"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -129,11 +130,27 @@ func (s *Topom) setup(config *Config) error {
 	} else {
 		s.ladmin = l
 
-		x, err := utils.ReplaceUnspecifiedIP("tcp", l.Addr().String(), s.config.HostAdmin)
-		if err != nil {
-			return err
+		var localIp string
+		var er error
+		if s.config.CoordinatorName == "filesystem" {
+			localIp = utils.HostIPs[0]
+		} else {
+			dialAddr := strings.Split(s.config.CoordinatorAddr, ",")
+			if len(dialAddr) == 0 {
+				return errors.New("CoordinatorAddr not correct")
+			}
+			if localIp, er = utils.GetOutboundIP(dialAddr[0]); er != nil {
+				return er
+			}
+			log.Warnf("dialAddr:%v,localIp:%v", dialAddr[0], localIp)
 		}
-		s.model.AdminAddr = x
+
+		localAddr := strings.Split(s.config.AdminAddr, ":")
+		if len(localAddr) != 2 {
+			return errors.New("AdminAddr not correct")
+		}
+
+		s.model.AdminAddr = fmt.Sprintf("%s:%s", localIp, localAddr[1])
 	}
 
 	s.model.Token = rpc.NewToken(
