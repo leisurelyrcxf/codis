@@ -54,6 +54,13 @@ jodis_auth = ""
 jodis_timeout = "20s"
 jodis_compatible = false
 
+# Set cluster related info 
+dashboard_addr = ""
+max_slot_num = 1024
+coordinator_name = ""
+coordinator_addr = ""
+coordinator_auth = ""
+
 # Set datacenter of proxy.
 proxy_datacenter = ""
 
@@ -147,6 +154,12 @@ type Config struct {
 	ProductAuth string `toml:"product_auth" json:"-"`
 	SessionAuth string `toml:"session_auth" json:"-"`
 
+	MaxSlotNum      int    `toml:"max_slot_num" json:"max_slot_num"`
+	DashboardDddr   string `toml:"dashboard_addr" json:"dashboard_addr"`
+	CoordinatorName string `toml:"coordinator_name" json:"coordinator_name"`
+	CoordinatorAddr string `toml:"coordinator_addr" json:"coordinator_addr"`
+	CoordinatorAuth string `toml:"coordinator_auth" json:"coordinator_auth"`
+
 	ProxyDataCenter      string         `toml:"proxy_datacenter" json:"proxy_datacenter"`
 	ProxyMaxClients      int            `toml:"proxy_max_clients" json:"proxy_max_clients"`
 	ProxyMaxOffheapBytes bytesize.Int64 `toml:"proxy_max_offheap_size" json:"proxy_max_offheap_size"`
@@ -182,7 +195,6 @@ type Config struct {
 	MetricsReportStatsdServer     string            `toml:"metrics_report_statsd_server" json:"metrics_report_statsd_server"`
 	MetricsReportStatsdPeriod     timesize.Duration `toml:"metrics_report_statsd_period" json:"metrics_report_statsd_period"`
 	MetricsReportStatsdPrefix     string            `toml:"metrics_report_statsd_prefix" json:"metrics_report_statsd_prefix"`
-	MaxSlotNum                    int
 }
 
 func NewDefaultConfig() *Config {

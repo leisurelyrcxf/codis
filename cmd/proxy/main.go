@@ -130,6 +130,7 @@ Options:
 	var dashboard string
 	if s, ok := utils.Argument(d, "--dashboard"); ok {
 		dashboard = s
+		config.DashboardDddr = s
 		log.Warnf("option --dashboard = %s", s)
 	}
 
@@ -164,6 +165,10 @@ Options:
 	if coordinator.name != "" {
 		log.Warnf("option --%s = %s", coordinator.name, coordinator.addr)
 	}
+
+	config.CoordinatorName = coordinator.name
+	config.CoordinatorAddr = coordinator.addr
+	config.CoordinatorAuth = coordinator.auth
 
 	var slots []*models.Slot
 	if s, ok := utils.Argument(d, "--fillslots"); ok {

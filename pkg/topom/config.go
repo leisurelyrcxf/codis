@@ -82,7 +82,7 @@ type Config struct {
 	SentinelFailoverTimeout      timesize.Duration `toml:"sentinel_failover_timeout" json:"sentinel_failover_timeout"`
 	SentinelNotificationScript   string            `toml:"sentinel_notification_script" json:"sentinel_notification_script"`
 	SentinelClientReconfigScript string            `toml:"sentinel_client_reconfig_script" json:"sentinel_client_reconfig_script"`
-	MaxSlotNum                   int
+	MaxSlotNum                   int               `toml:"max_slot_num" json:"max_slot_num"`
 }
 
 func NewDefaultConfig() *Config {

@@ -135,14 +135,14 @@ func (s *Topom) setup(config *Config) error {
 		if s.config.CoordinatorName == "filesystem" {
 			localIp = utils.HostIPs[0]
 		} else {
-			dialAddr := strings.Split(s.config.CoordinatorAddr, ",")
-			if len(dialAddr) == 0 {
-				return errors.New("CoordinatorAddr not correct")
+			if s.config.CoordinatorAddr == "" {
+				return errors.New("CoordinatorAddr must not empty")
 			}
+			dialAddr := strings.Split(s.config.CoordinatorAddr, ",")
 			if localIp, er = utils.GetOutboundIP(dialAddr[0]); er != nil {
 				return er
 			}
-			log.Warnf("dialAddr:%v,localIp:%v", dialAddr[0], localIp)
+			log.Infof("Dial CoordinatorAddr:%v,localIp:%v", dialAddr[0], localIp)
 		}
 
 		localAddr := strings.Split(s.config.AdminAddr, ":")

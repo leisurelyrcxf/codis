@@ -103,31 +103,56 @@ func New(config *Config) (*Proxy, error) {
 }
 
 func (s *Proxy) setup(config *Config) error {
+	var localIp string
+	var er error
+	if s.config.DashboardDddr != "" {
+		if localIp, er = utils.GetOutboundIP(s.config.DashboardDddr); er != nil {
+			return er
+		}
+		log.Infof("Dial DashboardDddr:%v,localIp:%v", s.config.DashboardDddr, localIp)
+	}
+	if localIp == "" && s.config.CoordinatorAddr != "" {
+		if s.config.CoordinatorName == "filesystem" {
+			localIp = utils.HostIPs[0]
+		} else {
+			dialAddr := strings.Split(s.config.CoordinatorAddr, ",")
+			if localIp, er = utils.GetOutboundIP(dialAddr[0]); er != nil {
+				return er
+			}
+			log.Infof("Dial CoordinatorAddr:%v,localIp:%v", dialAddr[0], localIp)
+		}
+	}
+	if localIp == "" {
+		return errors.New("Both DashboardDddr and CoordinatorAddr are not correct")
+	}
+
+	//proxy
 	proto := config.ProtoType
 	if l, err := net.Listen(proto, config.ProxyAddr); err != nil {
 		return errors.Trace(err)
 	} else {
 		s.lproxy = l
 
-		x, err := utils.ReplaceUnspecifiedIP(proto, l.Addr().String(), config.HostProxy)
-		if err != nil {
-			return err
+		localAddr := strings.Split(s.config.ProxyAddr, ":")
+		if len(localAddr) != 2 {
+			return errors.New("ProxyAddr not correct")
 		}
 		s.model.ProtoType = proto
-		s.model.ProxyAddr = x
+		s.model.ProxyAddr = fmt.Sprintf("%s:%s", localIp, localAddr[1])
 	}
 
+	//admin
 	proto = "tcp"
 	if l, err := net.Listen(proto, config.AdminAddr); err != nil {
 		return errors.Trace(err)
 	} else {
 		s.ladmin = l
 
-		x, err := utils.ReplaceUnspecifiedIP(proto, l.Addr().String(), config.HostAdmin)
-		if err != nil {
-			return err
+		localAddr := strings.Split(s.config.AdminAddr, ":")
+		if len(localAddr) != 2 {
+			return errors.New("AdminAddr not correct")
 		}
-		s.model.AdminAddr = x
+		s.model.AdminAddr = fmt.Sprintf("%s:%s", localIp, localAddr[1])
 	}
 
 	s.model.Token = rpc.NewToken(

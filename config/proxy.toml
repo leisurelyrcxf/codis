@@ -38,6 +38,13 @@ jodis_auth = ""
 jodis_timeout = "20s"
 jodis_compatible = false
 
+# Set cluster related info 
+dashboard_addr = ""
+max_slot_num = 1024
+coordinator_name = ""
+coordinator_addr = ""
+coordinator_auth = ""
+
 # Set datacenter of proxy.
 proxy_datacenter = ""
 
