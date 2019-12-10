@@ -201,7 +201,6 @@ type Config struct {
 	MetricsReportStatsdPrefix     string            `toml:"metrics_report_statsd_prefix" json:"metrics_report_statsd_prefix"`
 	MetricsReportPrometheusServer bool            `toml:"metrics_report_prometheus_server" json:"metrics_report_prometheus_server"`
 	MetricsReportPrometheusPeriod timesize.Duration `toml:"metrics_report_prometheus_period" json:"metrics_report_prometheus_period"`
-	MaxSlotNum                    int
 }
 
 func NewDefaultConfig() *Config {
