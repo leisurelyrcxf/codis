@@ -134,6 +134,10 @@ metrics_report_influxdb_database = ""
 metrics_report_statsd_server = ""
 metrics_report_statsd_period = "1s"
 metrics_report_statsd_prefix = ""
+
+# Set prometheus server, proxy will be scrape by prometheus.
+metrics_report_prometheus_server = false
+metrics_report_prometheus_period = "1s"
 `
 
 type Config struct {
@@ -195,6 +199,8 @@ type Config struct {
 	MetricsReportStatsdServer     string            `toml:"metrics_report_statsd_server" json:"metrics_report_statsd_server"`
 	MetricsReportStatsdPeriod     timesize.Duration `toml:"metrics_report_statsd_period" json:"metrics_report_statsd_period"`
 	MetricsReportStatsdPrefix     string            `toml:"metrics_report_statsd_prefix" json:"metrics_report_statsd_prefix"`
+	MetricsReportPrometheusServer bool            `toml:"metrics_report_prometheus_server" json:"metrics_report_prometheus_server"`
+	MetricsReportPrometheusPeriod timesize.Duration `toml:"metrics_report_prometheus_period" json:"metrics_report_prometheus_period"`
 }
 
 func NewDefaultConfig() *Config {
