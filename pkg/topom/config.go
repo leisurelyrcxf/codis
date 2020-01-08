@@ -83,6 +83,8 @@ type Config struct {
 	SentinelNotificationScript   string            `toml:"sentinel_notification_script" json:"sentinel_notification_script"`
 	SentinelClientReconfigScript string            `toml:"sentinel_client_reconfig_script" json:"sentinel_client_reconfig_script"`
 	MaxSlotNum                   int               `toml:"max_slot_num" json:"max_slot_num"`
+
+	PrometheusReportPeriod       timesize.Duration  `toml:"prometheus_report_period" json:"prometheus_report_period"`
 }
 
 func NewDefaultConfig() *Config {

@@ -5,6 +5,8 @@ package topom
 
 import (
 	"fmt"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"net/http"
 	"strconv"
 	"strings"
@@ -46,6 +48,13 @@ func newApiServer(t *Topom) http.Handler {
 			log.Warnf("[%p] API call %s from %s [%s]", t, path, remoteAddr, headerAddr)
 		}
 		c.Next()
+	})
+	// metrics endpoint should execute before gzip middleware.
+	m.Use(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != "GET" || req.URL.Path != "/metrics" {
+			return
+		}
+		promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{}).ServeHTTP(w, req)
 	})
 	m.Use(gzip.All())
 	m.Use(func(c martini.Context, w http.ResponseWriter) {
