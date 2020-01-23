@@ -55,6 +55,30 @@ func (s *Topom) RemoveGroup(gid int) error {
 	return s.storeRemoveGroup(g)
 }
 
+func (s *Topom) GetGroupByServer(addr string) (*models.Group, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ctx, err := s.newContext()
+	if err != nil {
+		return nil, -1, err
+	}
+
+	return ctx.getGroupByServer(addr)
+}
+
+func (s *Topom) GetGroup(gid int) (*models.Group, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ctx, err := s.newContext()
+	if err != nil {
+		return nil, err
+	}
+
+	return ctx.getGroup(gid)
+}
+
 func (s *Topom) ResyncGroup(gid int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

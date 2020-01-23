@@ -108,6 +108,8 @@ func newApiServer(t *Topom) http.Handler {
 				r.Put("/remove/:xauth/:addr", api.SyncRemoveAction)
 			})
 			r.Get("/info/:addr", api.InfoServer)
+			r.Get("/group-info/:addr", api.GroupInfo)
+			r.Get("/list/:gid", api.ListGroup)
 		})
 		r.Group("/slots", func(r martini.Router) {
 			r.Group("/action", func(r martini.Router) {
@@ -529,6 +531,38 @@ func (s *apiServer) InfoServer(params martini.Params) (int, string) {
 	} else {
 		return rpc.ApiResponseJson(info)
 	}
+}
+
+func (s *apiServer) GroupInfo(params martini.Params) (int, string) {
+	addr, err := s.parseAddr(params)
+	if err != nil {
+		return rpc.ApiResponseError(err)
+	}
+
+	g, sid, err := s.topom.GetGroupByServer(addr)
+	if err != nil {
+		return rpc.ApiResponseError(err)
+	}
+
+	info := make(map[string]int)
+	info["group_id"] = g.Id
+	info["server_idx"] = sid
+
+	return rpc.ApiResponseJson(info)
+}
+
+func (s *apiServer) ListGroup(params martini.Params) (int, string) {
+	gid, err := s.parseInteger(params, "gid")
+	if err != nil {
+		return rpc.ApiResponseError(err)
+	}
+
+	g, err := s.topom.GetGroup(gid)
+	if err != nil {
+		return rpc.ApiResponseError(err)
+	}
+
+	return rpc.ApiResponseJson(g.Servers)
 }
 
 func (s *apiServer) InfoSentinel(params martini.Params) (int, string) {
