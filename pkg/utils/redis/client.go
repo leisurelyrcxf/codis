@@ -198,6 +198,20 @@ func (c *Client) InfoFull() (map[string]string, error) {
 			return nil, errors.Errorf("invalid response = %v", r)
 		}
 		info["maxmemory"] = strconv.Itoa(v)
+
+		r, err = c.Do("CONFIG", "GET", "maxclients")
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		p, err = redigo.Values(r, nil)
+		if err != nil || len(p) != 2 {
+			return nil, errors.Errorf("invalid response = %v", r)
+		}
+		v, err = redigo.Int(p[1], nil)
+		if err != nil {
+			return nil, errors.Errorf("invalid response = %v", r)
+		}
+		info["maxclients"] = strconv.Itoa(v)
 		return info, nil
 	}
 }

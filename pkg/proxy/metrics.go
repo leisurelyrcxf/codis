@@ -4,16 +4,12 @@
 package proxy
 
 import (
-	"fmt"
-	"reflect"
 	"strings"
 	"time"
 
 	influxdbClient "github.com/influxdata/influxdb/client/v2"
-	prometheusClient "github.com/prometheus/client_golang/prometheus"
 	statsdClient "gopkg.in/alexcesaro/statsd.v2"
 
-	"github.com/CodisLabs/codis/pkg/utils/assert"
 	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/log"
 	"github.com/CodisLabs/codis/pkg/utils/math2"
@@ -173,100 +169,6 @@ func (p *Proxy) startMetricsStatsd() {
 		return nil
 	}, func() error {
 		c.Close()
-		return nil
-	})
-}
-
-func (p *Proxy) startMetricsPrometheus() {
-	server := p.config.MetricsReportPrometheusServer
-	if !server {
-		return
-	}
-
-	var (
-		period time.Duration
-
-		model        = p.Model()
-		replacer     = strings.NewReplacer(".", "_", ":", "_", "-", "_")
-		segs         = []string{
-			replacer.Replace(model.ProductName),
-			replacer.Replace(model.AdminAddr),
-			replacer.Replace(model.ProxyAddr),
-		}
-		namespace    = strings.Join(segs, "_")
-
-		gaugeHelpers = map[string]string{
-			"ops_total": "total operations",
-			"ops_fails": "total failed operations",
-			"ops_redis_errors": "redis errors number",
-			"ops_qps": "operations QPS",
-			"sessions_total": "total session number",
-			"sessions_alive": "alive session number",
-			"rusage_mem": "rusage memory",
-			"rusage_cpu": "rusage CPU",
-			"runtime_gc_num": "runtime GC number",
-			"runtime_gc_total_pausems": "runtime GC total pausems",
-			"runtime_num_procs": "runtime proc number",
-			"runtime_num_goroutines": "runtime goroutine number",
-			"runtime_num_cgo_call": "runtime cgo call number",
-			"runtime_num_mem_offheap": "runtime memory off-heap number",
-		}
-
-		gauges       = make(map[string]prometheusClient.Gauge)
-		gaugeList []prometheusClient.Collector
-	)
-
-	for gaugeName, gaugeHelper := range gaugeHelpers {
-		gauge := prometheusClient.NewGauge(
-			prometheusClient.GaugeOpts{
-				Namespace: namespace,
-				Name: gaugeName,
-				Help: gaugeHelper,
-			},
-		)
-		gauges[gaugeName] = gauge
-		gaugeList = append(gaugeList, gauge)
-	}
-	prometheusClient.MustRegister(gaugeList...)
-
-	period = p.config.MetricsReportPrometheusPeriod.Duration()
-	period = math2.MaxDuration(time.Second, period)
-	p.startMetricsReporter(period, func() error {
-		stats := p.Stats(StatsRuntime)
-
-		fields := map[string]interface{}{
-			"ops_total":                stats.Ops.Total,
-			"ops_fails":                stats.Ops.Fails,
-			"ops_redis_errors":         stats.Ops.Redis.Errors,
-			"ops_qps":                  stats.Ops.QPS,
-			"sessions_total":           stats.Sessions.Total,
-			"sessions_alive":           stats.Sessions.Alive,
-			"rusage_mem":               stats.Rusage.Mem,
-			"rusage_cpu":               stats.Rusage.CPU,
-			"runtime_gc_num":           stats.Runtime.GC.Num,
-			"runtime_gc_total_pausems": stats.Runtime.GC.TotalPauseMs,
-			"runtime_num_procs":        stats.Runtime.NumProcs,
-			"runtime_num_goroutines":   stats.Runtime.NumGoroutines,
-			"runtime_num_cgo_call":     stats.Runtime.NumCgoCall,
-			"runtime_num_mem_offheap":  stats.Runtime.MemOffheap,
-		}
-		var floatType = reflect.TypeOf(float64(0))
-		for key, value := range fields {
-			v := reflect.Indirect(reflect.ValueOf(value))
-			if !v.Type().ConvertibleTo(floatType) {
-				panic(fmt.Sprintf("type %T can't be converted to float", v.Type()))
-			}
-			fv := v.Convert(floatType)
-
-			gauge := gauges[key]
-			assert.Must(gauge != nil)
-			gauge.Set(fv.Float())
-		}
-		return nil
-	}, func() error {
-		for _, gauge := range gauges {
-			gauge.Set(0)
-		}
 		return nil
 	})
 }

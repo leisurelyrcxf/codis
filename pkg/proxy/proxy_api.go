@@ -16,9 +16,6 @@ import (
 	"github.com/martini-contrib/gzip"
 	"github.com/martini-contrib/render"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	"github.com/CodisLabs/codis/pkg/models"
 	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/log"
@@ -47,13 +44,6 @@ func newApiServer(p *Proxy) http.Handler {
 			log.Warnf("[%p] API call %s from %s [%s]", p, path, remoteAddr, headerAddr)
 		}
 		c.Next()
-	})
-	// metrics endpoint should execute before gzip middleware.
-	m.Use(func(w http.ResponseWriter, req *http.Request) {
-		if req.Method != "GET" || req.URL.Path != "/metrics" {
-			return
-		}
-		promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{}).ServeHTTP(w, req)
 	})
 	m.Use(gzip.All())
 	m.Use(func(c martini.Context, w http.ResponseWriter) {
