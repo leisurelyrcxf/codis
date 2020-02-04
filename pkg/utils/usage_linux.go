@@ -8,7 +8,11 @@ package utils
 import (
 	"bufio"
 	"fmt"
+	"github.com/CodisLabs/codis/pkg/utils/assert"
+	"github.com/CodisLabs/codis/pkg/utils/log"
 	"os"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +23,8 @@ import (
 #include <unistd.h>
 */
 import "C"
+
+var physicalMemorySize int64
 
 type Usage struct {
 	Utime  time.Duration `json:"utime"`
@@ -33,7 +39,17 @@ type Usage struct {
 }
 
 func (u *Usage) MemTotal() int64 {
+	if u == nil {
+		return 0
+	}
 	return u.VmRss
+}
+
+func (u *Usage) MemPercentage() float64 {
+	if u == nil {
+		return 0.0
+	}
+	return float64(u.VmRss) / float64(physicalMemorySize)
 }
 
 func (u *Usage) CPUTotal() time.Duration {
@@ -97,4 +113,40 @@ func GetUsage() (*Usage, error) {
 	}
 	u.VmRss *= int64(syscall.Getpagesize())
 	return u, nil
+}
+
+func init() {
+	f, err := os.Open("/proc/meminfo")
+	if err != nil {
+		log.PanicErrorf(err, "can't open /proc/meminfo file")
+	}
+	defer f.Close()
+
+	reader := bufio.NewReader(f)
+
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			log.PanicErrorf(err, "can't find physical memory info")
+		}
+		splits := strings.Split(line, ":")
+		if splits[0] == "MemTotal" {
+			memStrVal := splits[1]
+			kbIdx := strings.Index(memStrVal, "kB")
+			if kbIdx == -1 {
+				log.Panicf("can't find physical memory info, expect kB in value")
+			}
+			memStrVal = memStrVal[:kbIdx]
+			memStrVal = strings.TrimSpace(memStrVal)
+			memSize, err := strconv.ParseInt(memStrVal, 10, 64)
+			if err != nil {
+				log.PanicErrorf(err, "malformed memory size")
+			}
+			physicalMemorySize = memSize * 1024
+			log.Infof("physical memory size: %d bytes", physicalMemorySize)
+			break
+		}
+	}
+
+	assert.Must(physicalMemorySize > 0)
 }

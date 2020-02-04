@@ -98,7 +98,6 @@ func New(config *Config) (*Proxy, error) {
 	s.startMetricsJson()
 	s.startMetricsInfluxdb()
 	s.startMetricsStatsd()
-	s.startMetricsPrometheus()
 
 	return s, nil
 }
@@ -516,13 +515,15 @@ type Stats struct {
 	Sessions struct {
 		Total int64 `json:"total"`
 		Alive int64 `json:"alive"`
+		Max   int   `json:"max_clients"`
 	} `json:"sessions"`
 
 	Rusage struct {
-		Now string       `json:"now"`
-		CPU float64      `json:"cpu"`
-		Mem int64        `json:"mem"`
-		Raw *utils.Usage `json:"raw,omitempty"`
+		Now           string       `json:"now"`
+		CPU           float64      `json:"cpu"`
+		Mem           int64        `json:"mem"`
+		MemPercentage float64      `json:"mem_percentage"`
+		Raw           *utils.Usage `json:"raw,omitempty"`
 	} `json:"rusage"`
 
 	Backend struct {
@@ -617,11 +618,13 @@ func (s *Proxy) Stats(flags StatsFlags) *Stats {
 
 	stats.Sessions.Total = SessionsTotal()
 	stats.Sessions.Alive = SessionsAlive()
+	stats.Sessions.Max   = s.Config().ProxyMaxClients
 
 	if u := GetSysUsage(); u != nil {
 		stats.Rusage.Now = u.Now.String()
 		stats.Rusage.CPU = u.CPU
 		stats.Rusage.Mem = u.MemTotal()
+		stats.Rusage.MemPercentage = u.MemPercentage()
 		stats.Rusage.Raw = u.Usage
 	}
 

@@ -9,7 +9,6 @@ import (
 	"github.com/CodisLabs/codis/pkg/proxy"
 	"github.com/CodisLabs/codis/pkg/utils/assert"
 	"github.com/prometheus/client_golang/prometheus"
-	"math"
 	"net"
 	"net/http"
 	"os"
@@ -495,32 +494,31 @@ func (s *Topom) Overview() (*Overview, error) {
 }
 
 func (p *Topom) collectPrometheusMetrics() {
-	type proxyFieldGetter func(*Stats, string) interface{}
+	type proxyFieldGetter func(*ProxyStats) interface{}
 
-	const LabelAddr = "addr"
-
-	var (
-		period time.Duration
-
-		model        = p.Model()
-		replacer     = strings.NewReplacer(".", "_", ":", "_", "-", "_")
-		segs         = []string{
-			replacer.Replace(model.ProductName),
-		}
-		namespacePrefix = strings.Join(segs, "_")
+	const (
+		LabelProductName = "product_name"
+		LabelAddr        = "addr"
+		NanValue         = -1.0
 	)
 
 	var (
-		namespaceProxy = namespacePrefix + "_proxy"
+		proxyNamespace     = "proxy"
 
-		proxyGaugeHelpers = map[string]string{
+		proxyHealthMetrics = map[string]string{
+			"up": "whether proxy's status is up",
+		}
+
+		proxyMetrics       = map[string]string{
 			"ops_total": "total operations",
 			"ops_fails": "total failed operations",
 			"ops_redis_errors": "redis errors number",
 			"ops_qps": "operations QPS",
 			"sessions_total": "total session number",
 			"sessions_alive": "alive session number",
+			"sessions_max": "max session number",
 			"rusage_mem": "rusage memory",
+			"rusage_mem_percentage": "rusage memory percentage",
 			"rusage_cpu": "rusage CPU",
 			"runtime_gc_num": "runtime GC number",
 			"runtime_gc_total_pausems": "runtime GC total pausems",
@@ -530,76 +528,54 @@ func (p *Topom) collectPrometheusMetrics() {
 			"runtime_num_mem_offheap": "runtime memory off-heap number",
 		}
 
-		proxyGaugeVecs     = make(map[string]*prometheus.GaugeVec)
-		proxyAddrs           []string
-		proxyAddrTokenMap  = make(map[string]string)
+		proxyGauges        = make(map[string]*prometheus.GaugeVec)
+
 		emptyProxyStats    = &proxy.Stats{}
 		emptyRuntimeStats  = &proxy.RuntimeStats{}
 
-		proxyAddrsGetter = func(s *Stats) {
-			for _, pm := range s.Proxy.Models {
-				_, exist := proxyAddrTokenMap[pm.ProxyAddr]
-				if !exist {
-					proxyAddrs = append(proxyAddrs, pm.ProxyAddr)
-					proxyAddrTokenMap[pm.ProxyAddr] = pm.Token
-				}
-			}
-		}
-
-		proxyStatsGetter = func(stats *Stats, addr string) *proxy.Stats {
-			if stats == nil {
+		proxyStatsGetter   = func(ps *ProxyStats) *proxy.Stats {
+			if ps == nil || ps.Stats == nil {
 				return emptyProxyStats
 			}
-			proxyStats := stats.Proxy.Stats[proxyAddrTokenMap[addr]]
-			if proxyStats == nil {
-				return emptyProxyStats
-			}
-			if proxyStats.Stats == nil {
-				return emptyProxyStats
-			}
-			return proxyStats.Stats
+			return ps.Stats
 		}
 
-		proxyRuntimeStatsGetter = func(stats *Stats, addr string) *proxy.RuntimeStats {
-			if stats == nil {
+		proxyRStatsGetter  = func(ps *ProxyStats) *proxy.RuntimeStats {
+			if ps == nil || ps.Stats == nil || ps.Stats.Runtime == nil  {
 				return emptyRuntimeStats
 			}
-			proxyStats := stats.Proxy.Stats[proxyAddrTokenMap[addr]]
-			if proxyStats == nil {
-				return emptyRuntimeStats
-			}
-			if proxyStats.Stats == nil {
-				return emptyRuntimeStats
-			}
-			runtimeStats := proxyStats.Stats.Runtime
-			if runtimeStats == nil {
-				return emptyRuntimeStats
-			}
-			return runtimeStats
+			return ps.Stats.Runtime
 		}
 
-		proxyFieldGetters = map[string]proxyFieldGetter{
-			"ops_total":                func(stats *Stats, addr string) interface{} { return proxyStatsGetter(stats, addr).Ops.Total },
-			"ops_fails":                func(stats *Stats, addr string) interface{} { return proxyStatsGetter(stats, addr).Ops.Fails },
-			"ops_redis_errors":         func(stats *Stats, addr string) interface{} { return proxyStatsGetter(stats, addr).Ops.Redis.Errors },
-			"ops_qps":                  func(stats *Stats, addr string) interface{} { return proxyStatsGetter(stats, addr).Ops.QPS },
-			"sessions_total":           func(stats *Stats, addr string) interface{} { return proxyStatsGetter(stats, addr).Sessions.Total },
-			"sessions_alive":           func(stats *Stats, addr string) interface{} { return proxyStatsGetter(stats, addr).Sessions.Alive },
-			"rusage_mem":               func(stats *Stats, addr string) interface{} { return proxyStatsGetter(stats, addr).Rusage.Mem },
-			"rusage_cpu":               func(stats *Stats, addr string) interface{} { return proxyStatsGetter(stats, addr).Rusage.CPU },
-			"runtime_gc_num":           func(stats *Stats, addr string) interface{} { return proxyRuntimeStatsGetter(stats, addr).GC.Num },
-			"runtime_gc_total_pausems": func(stats *Stats, addr string) interface{} { return proxyRuntimeStatsGetter(stats, addr).GC.TotalPauseMs },
-			"runtime_num_procs":        func(stats *Stats, addr string) interface{} { return proxyRuntimeStatsGetter(stats, addr).NumProcs },
-			"runtime_num_goroutines":   func(stats *Stats, addr string) interface{} { return proxyRuntimeStatsGetter(stats, addr).NumGoroutines },
-			"runtime_num_cgo_call":     func(stats *Stats, addr string) interface{} { return proxyRuntimeStatsGetter(stats, addr).NumCgoCall },
-			"runtime_num_mem_offheap":  func(stats *Stats, addr string) interface{} { return proxyRuntimeStatsGetter(stats, addr).MemOffheap },
+		proxyFieldGetters  = map[string]proxyFieldGetter{
+			"ops_total":                func(ps *ProxyStats) interface{} { return proxyStatsGetter(ps).Ops.Total },
+			"ops_fails":                func(ps *ProxyStats) interface{} { return proxyStatsGetter(ps).Ops.Fails },
+			"ops_redis_errors":         func(ps *ProxyStats) interface{} { return proxyStatsGetter(ps).Ops.Redis.Errors },
+			"ops_qps":                  func(ps *ProxyStats) interface{} { return proxyStatsGetter(ps).Ops.QPS },
+			"sessions_total":           func(ps *ProxyStats) interface{} { return proxyStatsGetter(ps).Sessions.Total },
+			"sessions_alive":           func(ps *ProxyStats) interface{} { return proxyStatsGetter(ps).Sessions.Alive },
+			"sessions_max":             func(ps *ProxyStats) interface{} { return proxyStatsGetter(ps).Sessions.Max },
+			"rusage_mem":               func(ps *ProxyStats) interface{} { return proxyStatsGetter(ps).Rusage.Mem },
+			"rusage_mem_percentage":    func(ps *ProxyStats) interface{} { return proxyStatsGetter(ps).Rusage.MemPercentage },
+			"rusage_cpu":               func(ps *ProxyStats) interface{} { return proxyStatsGetter(ps).Rusage.CPU },
+			"runtime_gc_num":           func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).GC.Num },
+			"runtime_gc_total_pausems": func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).GC.TotalPauseMs },
+			"runtime_num_procs":        func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).NumProcs },
+			"runtime_num_goroutines":   func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).NumGoroutines },
+			"runtime_num_cgo_call":     func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).NumCgoCall },
+			"runtime_num_mem_offheap":  func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).MemOffheap },
 		}
 	)
 
 	var (
-		namespaceRedis = namespacePrefix + "_redis"
+		redisNamespace     = "redis"
 
-		redisMetrics = map[string]string {
+		redisHealthMetrics = map[string]string {
+			"up": "0",
+			"ok": "0",
+		}
+
+		redisMetrics       = map[string]string {
 			"aof_current_rewrite_time_sec": "-1",
 			"aof_enabled": "0",
 			//"aof_last_bgrewrite_status": "ok",
@@ -627,7 +603,7 @@ func (p *Topom) collectPrometheusMetrics() {
 			"lru_clock": "16750322",
 			"master_repl_offset": "0",
 			"maxmemory": "0",
-			"maxmemory_human": "0B",
+			"maxclients": "0",
 			"mem_fragmentation_ratio": "2.44",
 			"migrate_cached_sockets": "0",
 			"process_id": "31493",
@@ -655,7 +631,6 @@ func (p *Topom) collectPrometheusMetrics() {
 			"total_net_input_bytes": "56590",
 			"total_net_output_bytes": "2362378",
 			"total_system_memory": "16668811264",
-			"total_system_memory_human": "15.52G",
 			"uptime_in_days": "0",
 			"uptime_in_seconds": "1652",
 			"used_cpu_sys": "1.31",
@@ -663,123 +638,67 @@ func (p *Topom) collectPrometheusMetrics() {
 			"used_cpu_user": "0.81",
 			"used_cpu_user_children": "0.00",
 			"used_memory": "2293544",
-			"used_memory_human": "2.19M",
 			"used_memory_lua": "37888",
-			"used_memory_lua_human": "37.00K",
 			"used_memory_peak": "2294568",
-			"used_memory_peak_human": "2.19M",
 			"used_memory_rss": "5595136",
-			"used_memory_rss_human": "5.34M",
 		}
 
-		redisGaugeVecs  = make(map[string]*prometheus.GaugeVec)
-		redisAddrs      []string
-		redisAddrMap    = make(map[string]struct{})
-
-		redisAddrsGetter = func(s *Stats) {
-			for redisAddr, _ := range s.Group.Stats {
-				_, exist := redisAddrMap[redisAddr]
-				if !exist {
-					redisAddrs = append(redisAddrs, redisAddr)
-					redisAddrMap[redisAddr] = struct{}{}
-				}
-			}
-		}
-
-		redisMetricAsFloat64 = func(strVal string) (float64, error) {
-			if len(strVal) == 0 {
-				return math.NaN(), fmt.Errorf("empty string")
-			}
-			eta := 1.0
-			strVal = strings.ToLower(strVal)
-			switch strVal[len(strVal) - 1] {
-			case 'b':
-				strVal = strVal[:len(strVal) - 1]
-			case 'k':
-				eta = 1000.0
-				strVal = strVal[:len(strVal) - 1]
-			case 'm':
-				eta = 1000 * 1000
-				strVal = strVal[:len(strVal) - 1]
-			case 'g':
-				eta = 1000 * 1000 * 1000
-				strVal = strVal[:len(strVal) - 1]
-			default:
-				break
-			}
-			if len(strVal) == 0 {
-				return math.NaN(), fmt.Errorf("empty string")
-			}
-			base, err := strconv.ParseFloat(strVal, 64)
-			if err != nil {
-				return math.NaN(), err
-			}
-			return base * eta, nil
-		}
-
-		redisFieldGetter = func(stats *Stats, addr string, metric string) float64 {
-			if stats == nil || stats.Group.Stats == nil {
-				return math.NaN()
-			}
-			redisStats := stats.Group.Stats[addr]
-			if redisStats == nil {
-				return math.NaN()
-			}
-			s := redisStats.Stats
-			if s == nil {
-				return math.NaN()
-			}
-			strVal, ok := s[metric]
-			if !ok {
-				log.Errorf("metric '%s' doesn't exist", metric)
-				return math.NaN()
-			}
-			fVal, err := redisMetricAsFloat64(strVal)
-			if err != nil {
-				log.ErrorErrorf(err, "redisMetricAsFloat64() failed, string value: '%s', metric: '%s'", strVal, metric)
-			}
-			return fVal
-		}
+		redisGauges        = make(map[string]*prometheus.GaugeVec)
 	)
 
 	{
 		var proxyGaugeList []prometheus.Collector
-		for gaugeName, gaugeHelper := range proxyGaugeHelpers {
-			gaugeVec := prometheus.NewGaugeVec(
-				prometheus.GaugeOpts{
-					Namespace: namespaceProxy,
-					Name:      gaugeName,
-					Help:      gaugeHelper,
-				}, []string{
-					LabelAddr,
-				},
-			)
-			proxyGaugeVecs[gaugeName] = gaugeVec
-			proxyGaugeList = append(proxyGaugeList, gaugeVec)
+		proxyGaugeCollector := func(metrics map[string]string) {
+			for gaugeName, gaugeHelper := range metrics {
+				gaugeVec := prometheus.NewGaugeVec(
+					prometheus.GaugeOpts{
+						Namespace: proxyNamespace,
+						Name:      gaugeName,
+						Help:      gaugeHelper,
+					}, []string{
+						LabelProductName,
+						LabelAddr,
+					},
+				)
+				proxyGauges[gaugeName] = gaugeVec
+				proxyGaugeList = append(proxyGaugeList, gaugeVec)
+			}
 		}
+		proxyGaugeCollector(proxyHealthMetrics)
+		proxyGaugeCollector(proxyMetrics)
 		prometheus.MustRegister(proxyGaugeList...)
 	}
 
 	{
 		var redisGaugeList []prometheus.Collector
-		for gaugeName, _ := range redisMetrics {
-			gaugeVec := prometheus.NewGaugeVec(
-				prometheus.GaugeOpts{
-					Namespace: namespaceRedis,
-					Name:      gaugeName,
-					Help:      "",
-				}, []string{
-					LabelAddr,
-				},
-			)
-			redisGaugeVecs[gaugeName] = gaugeVec
-			redisGaugeList = append(redisGaugeList, gaugeVec)
+		redisGaugeCollector := func(metrics map[string]string) {
+			for gaugeName := range metrics {
+				gaugeVec := prometheus.NewGaugeVec(
+					prometheus.GaugeOpts{
+						Namespace: redisNamespace,
+						Name:      gaugeName,
+						Help:      "",
+					}, []string{
+						LabelProductName,
+						LabelAddr,
+					},
+				)
+				redisGauges[gaugeName] = gaugeVec
+				redisGaugeList = append(redisGaugeList, gaugeVec)
+			}
 		}
+		redisGaugeCollector(redisHealthMetrics)
+		redisGaugeCollector(redisMetrics)
 		prometheus.MustRegister(redisGaugeList...)
 	}
 
-	period = p.config.PrometheusReportPeriod.Duration()
+	var (
+		productName  = p.Model().ProductName
+		period       = p.config.PrometheusReportPeriod.Duration()
+	)
+
 	period = math2.MaxDuration(time.Second, period)
+
 	p.startMetricsReporter(period, func() error {
 		stats, err := p.Stats()
 		if err != nil {
@@ -787,42 +706,123 @@ func (p *Topom) collectPrometheusMetrics() {
 		}
 
 		{
-			proxyAddrsGetter(stats)
+			// Proxy metrics
+			for _, pm := range stats.Proxy.Models {
+				addr := pm.ProxyAddr
+				proxyGaugeUp := proxyGauges["up"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr})
 
-			var floatType = reflect.TypeOf(float64(0))
-			for gaugeName, gaugeVec := range proxyGaugeVecs {
-				getter, ok := proxyFieldGetters[gaugeName]
-				assert.Must(ok)
-				for _, proxyAddr := range proxyAddrs {
-					v := reflect.Indirect(reflect.ValueOf(getter(stats, proxyAddr)))
+				var ps *ProxyStats
+				if stats.Proxy.Stats == nil {
+					proxyGaugeUp.Set(0)
+				} else {
+					ps = stats.Proxy.Stats[pm.Token]
+					switch {
+					case ps == nil:
+						proxyGaugeUp.Set(0)
+					case ps.Error != nil:
+						proxyGaugeUp.Set(0)
+					case ps.Timeout || ps.Stats == nil:
+						proxyGaugeUp.Set(0)
+					default:
+						if ps.Stats.Online && !ps.Stats.Closed {
+							proxyGaugeUp.Set(1)
+						} else {
+							proxyGaugeUp.Set(0)
+						}
+					}
+				}
+
+				var floatType = reflect.TypeOf(float64(0))
+				for metric := range proxyMetrics {
+					getter := proxyFieldGetters[metric]
+					assert.Must(getter != nil)
+
+					v := reflect.Indirect(reflect.ValueOf(getter(ps)))
 					if !v.Type().ConvertibleTo(floatType) {
-						// Impossible here.
 						panic(fmt.Sprintf("type %T can't be converted to float", v.Type()))
 					}
-					fv := v.Convert(floatType)
+					fv := v.Convert(floatType).Float()
 
-					assert.Must(gaugeVec != nil)
-					gaugeVec.With(prometheus.Labels{LabelAddr: proxyAddr}).Set(fv.Float())
+					proxyGauges[metric].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr}).Set(fv)
 				}
 			}
 		}
 
 		{
-			redisAddrsGetter(stats)
-			for gaugeName, gaugeVec := range redisGaugeVecs {
-				for _, redisAddr := range redisAddrs {
-					fVal := redisFieldGetter(stats, redisAddr, gaugeName)
-					gaugeVec.With(prometheus.Labels{LabelAddr: redisAddr}).Set(fVal)
+			// Redis metrics
+			for _, g := range stats.Group.Models {
+				for i, x := range g.Servers {
+					var addr = x.Addr
+
+					rs := stats.Group.Stats[addr]
+					redisGaugeUp := redisGauges["up"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr})
+					redisGaugeOK := redisGauges["ok"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr})
+
+					switch {
+					case rs == nil:
+						redisGaugeUp.Set(0)
+						redisGaugeOK.Set(0)
+					case rs.Error != nil:
+						redisGaugeUp.Set(0)
+						redisGaugeOK.Set(0)
+					case rs.Timeout || rs.Stats == nil:
+						redisGaugeUp.Set(0)
+						redisGaugeOK.Set(0)
+					default:
+						redisGaugeUp.Set(1)
+						if i == 0 {
+							if rs.Stats["master_addr"] != "" {
+								redisGaugeOK.Set(0)
+							} else {
+								redisGaugeOK.Set(1)
+							}
+						} else {
+							if rs.Stats["master_addr"] != g.Servers[0].Addr {
+								redisGaugeOK.Set(0)
+							} else {
+								switch rs.Stats["master_link_status"] {
+								default:
+									redisGaugeOK.Set(0)
+								case "up":
+									redisGaugeOK.Set(1)
+								case "down":
+									redisGaugeOK.Set(0)
+								}
+							}
+						}
+					}
+
+					for metric := range redisMetrics {
+						var val float64
+
+						if rs == nil || rs.Stats == nil {
+							val = NanValue
+						} else {
+							if strVal, ok := rs.Stats[metric]; !ok {
+								log.Errorf("metric '%s' doesn't exist", metric)
+								val = NanValue
+							} else {
+								val, err = strconv.ParseFloat(strVal, 64)
+								if err != nil {
+									log.ErrorErrorf(err, "redis Metric as float64 failed, string value: '%s', metric: '%s'", strVal, metric)
+									val = NanValue
+								}
+							}
+						}
+
+						redisGauges[metric].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr}).Set(val)
+					}
 				}
 			}
 		}
+
 		return nil
 	}, func() {
-		for _, proxyGaugeVec := range proxyGaugeVecs {
-			proxyGaugeVec.Reset()
+		for _, proxyGauge := range proxyGauges {
+			proxyGauge.Reset()
 		}
-		for _, redisGaugeVec := range redisGaugeVecs {
-			redisGaugeVec.Reset()
+		for _, redisGauge := range redisGauges {
+			redisGauge.Reset()
 		}
 	})
 }
