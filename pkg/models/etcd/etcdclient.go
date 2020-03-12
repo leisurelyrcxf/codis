@@ -229,6 +229,10 @@ func (c *Client) List(path string, must bool) ([]string, error) {
 }
 
 func (c *Client) CreateEphemeral(path string, data []byte) (<-chan struct{}, error) {
+	return c.CreateEphemeralWithTimeout(path, data, c.timeout)
+}
+
+func (c *Client) CreateEphemeralWithTimeout(path string, data []byte, timeout time.Duration) (<-chan struct{}, error) {
 	c.Lock()
 	defer c.Unlock()
 	if c.closed {
@@ -237,13 +241,16 @@ func (c *Client) CreateEphemeral(path string, data []byte) (<-chan struct{}, err
 	cntx, cancel := c.newContext()
 	defer cancel()
 	log.Debugf("etcd create-ephemeral node %s", path)
-	_, err := c.kapi.Set(cntx, path, string(data), &client.SetOptions{PrevExist: client.PrevNoExist, TTL: c.timeout})
+	if timeout < 25 * time.Second {
+		timeout = 25 * time.Second
+	}
+	_, err := c.kapi.Set(cntx, path, string(data), &client.SetOptions{PrevExist: client.PrevNoExist, TTL: timeout})
 	if err != nil {
 		log.Debugf("etcd create-ephemeral node %s failed: %s", path, err)
 		return nil, errors.Trace(err)
 	}
 	log.Debugf("etcd create-ephemeral OK")
-	return runRefreshEphemeral(c, path), nil
+	return runRefreshEphemeral(c, path, timeout), nil
 }
 
 func (c *Client) CreateEphemeralInOrder(path string, data []byte) (<-chan struct{}, string, error) {
@@ -262,25 +269,42 @@ func (c *Client) CreateEphemeralInOrder(path string, data []byte) (<-chan struct
 	}
 	node := r.Node.Key
 	log.Debugf("etcd create-ephemeral-inorder OK, node = %s", node)
-	return runRefreshEphemeral(c, node), node, nil
+	return runRefreshEphemeral(c, node, c.timeout), node, nil
 }
 
-func runRefreshEphemeral(c *Client, path string) <-chan struct{} {
+func runRefreshEphemeral(c *Client, path string, timeout time.Duration) <-chan struct{} {
 	signal := make(chan struct{})
 	go func() {
 		defer close(signal)
 		for {
-			if err := c.RefreshEphemeral(path); err != nil {
+			ctx, cancel := context.WithTimeout(c.context, timeout * 2 / 5)
+			if err := c.RefreshEphemeralWithRetry(ctx, path, timeout); err != nil {
+				cancel()
 				return
 			} else {
-				time.Sleep(c.timeout / 2)
+				cancel()
+				time.Sleep(timeout * 2 / 5)
 			}
 		}
 	}()
 	return signal
 }
 
-func (c *Client) RefreshEphemeral(path string) error {
+func (c *Client) RefreshEphemeralWithRetry(ctx context.Context, path string, timeout time.Duration) error {
+	for {
+		if err := c.RefreshEphemeral(path, timeout); err != nil {
+			select {
+			case <-ctx.Done():
+				return err
+			case <-time.After(100 * time.Millisecond):
+			}
+		} else {
+			return nil
+		}
+	}
+}
+
+func (c *Client) RefreshEphemeral(path string, timeout time.Duration) error {
 	c.Lock()
 	defer c.Unlock()
 	if c.closed {
@@ -289,7 +313,7 @@ func (c *Client) RefreshEphemeral(path string) error {
 	cntx, cancel := c.newContext()
 	defer cancel()
 	log.Debugf("etcd refresh-ephemeral node %s", path)
-	_, err := c.kapi.Set(cntx, path, "", &client.SetOptions{PrevExist: client.PrevExist, Refresh: true, TTL: c.timeout})
+	_, err := c.kapi.Set(cntx, path, "", &client.SetOptions{PrevExist: client.PrevExist, Refresh: true, TTL: timeout})
 	if err != nil {
 		log.Debugf("etcd refresh-ephemeral node %s failed: %s", path, err)
 		return errors.Trace(err)

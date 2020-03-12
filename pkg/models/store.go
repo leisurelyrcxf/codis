@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"time"
 
 	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/log"
@@ -118,6 +119,10 @@ func (s *Store) SentinelPath() string {
 
 func (s *Store) Acquire(topom *Topom) error {
 	return s.client.Create(s.LockPath(), topom.Encode())
+}
+
+func (s *Store) AcquireEphemeral(topom *Topom) (<-chan struct{}, error) {
+	return s.client.CreateEphemeralWithTimeout(s.LockPath(), topom.Encode(), time.Second * 25)
 }
 
 func (s *Store) Release() error {
