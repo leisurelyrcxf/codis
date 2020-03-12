@@ -232,6 +232,10 @@ func (c *Client) CreateEphemeral(path string, data []byte) (<-chan struct{}, err
 	return signal, nil
 }
 
+func (c *Client) CreateEphemeralWithTimeout(path string, data []byte, timeout time.Duration) (<-chan struct{}, error) {
+	return c.CreateEphemeral(path, data)
+}
+
 func (c *Client) create(conn *zk.Conn, path string, data []byte, flag int32) (string, error) {
 	if err := c.mkdir(conn, filepath.Dir(path)); err != nil {
 		return "", err

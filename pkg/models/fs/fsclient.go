@@ -334,6 +334,10 @@ func (c *Client) CreateEphemeral(path string, data []byte) (<-chan struct{}, err
 	return nil, errors.Trace(ErrNotSupported)
 }
 
+func (c *Client) CreateEphemeralWithTimeout(path string, data []byte, timeout time.Duration) (<-chan struct{}, error) {
+	return c.CreateEphemeral(path, data)
+}
+
 func (c *Client) CreateEphemeralInOrder(path string, data []byte) (<-chan struct{}, string, error) {
 	c.Lock()
 	defer c.Unlock()

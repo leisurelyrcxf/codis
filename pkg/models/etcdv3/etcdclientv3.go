@@ -260,6 +260,10 @@ func (c *Client) listLocked(path string, must bool) ([]string, error) {
 }
 
 func (c *Client) CreateEphemeral(path string, data []byte) (<-chan struct{}, error) {
+	return c.CreateEphemeralWithTimeout(path, data, c.timeout)
+}
+
+func (c *Client) CreateEphemeralWithTimeout(path string, data []byte, timeout time.Duration) (<-chan struct{}, error) {
 	if strings.LastIndexByte(path, '/') == len(path) - 1 {
 		path = path[:len(path)-1]
 	}
@@ -272,9 +276,9 @@ func (c *Client) CreateEphemeral(path string, data []byte) (<-chan struct{}, err
 	defer cancelLease()
 	log.Debugf("etcd create-ephemeral node %s", path)
 
-	timeoutInSeconds := int64(c.timeout) / int64(time.Second)
-	if timeoutInSeconds < 1 {
-		timeoutInSeconds = 1
+	timeoutInSeconds := int64(timeout) / int64(time.Second)
+	if timeoutInSeconds < 25 {
+		timeoutInSeconds = 25
 	}
 	lease, err := c.c.Grant(cntxLease, timeoutInSeconds)
 	if err != nil {
@@ -307,40 +311,29 @@ func (c *Client) CreateEphemeral(path string, data []byte) (<-chan struct{}, err
 		return nil, err
 	}
 	log.Debugf("etcd create-ephemeral OK")
-	return runRefreshEphemeral(c, path, lease.ID), nil
+	return runRefreshEphemeral(c, path, lease.ID)
 }
 
-func runRefreshEphemeral(c *Client, path string, leaseID clientv3.LeaseID) <-chan struct{} {
+func runRefreshEphemeral(c *Client, path string, leaseID clientv3.LeaseID) (<-chan struct{}, error) {
+	ctx, cancel := context.WithCancel(clientv3.WithRequireLeader(c.context))
+	keepAlive, err := c.c.KeepAlive(ctx, leaseID)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	if keepAlive == nil {
+		cancel()
+		return nil, fmt.Errorf("keepAlive is nil")
+	}
+
 	signal := make(chan struct{})
 	go func() {
 		defer close(signal)
-		for {
-			if err := c.refreshEphemeral(path, leaseID); err != nil {
-				return
-			} else {
-				time.Sleep(c.timeout / 2)
-			}
+		for range keepAlive {
+			// eat messages until keep alive channel closes
 		}
 	}()
-	return signal
-}
-
-func (c *Client) refreshEphemeral(path string, leaseID clientv3.LeaseID) error {
-	c.Lock()
-	defer c.Unlock()
-	if c.closed {
-		return errors.Trace(ErrClosedClient)
-	}
-	cntx, cancel := c.newContext()
-	defer cancel()
-	log.Debugf("etcd refresh-ephemeral node %s", path)
-	_, err := c.c.KeepAliveOnce(cntx, leaseID)
-	if err != nil {
-		log.Debugf("etcd refresh-ephemeral node %s failed: %s", path, err)
-		return errors.Trace(err)
-	}
-	log.Debugf("etcd refresh-ephemeral OK")
-	return nil
+	return signal, nil
 }
 
 func (c *Client) MkDir(path string) error {
@@ -432,7 +425,8 @@ func (c *Client) CreateEphemeralInOrder(path string, data []byte) (<-chan struct
 	}
 	log.Debugf("etcd create-ephemeral OK")
 	c.leaseID = lease.ID
-	return runRefreshEphemeral(c, key, lease.ID), key, nil
+	signal, err := runRefreshEphemeral(c, key, lease.ID)
+	return signal, key, err
 }
 
 func (c *Client) GetMinKey(path string) (string, error) {

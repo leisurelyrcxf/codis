@@ -206,11 +206,19 @@ func (s *Topom) Start(routines bool) error {
 	if s.online {
 		return nil
 	} else {
-		if err := s.store.Acquire(s.model); err != nil {
+		var w <-chan struct{}
+		var err error
+		if w, err = s.store.AcquireEphemeral(s.model); err != nil {
 			log.ErrorErrorf(err, "store: acquire lock of %s failed", s.config.ProductName)
 			return errors.Errorf("store: acquire lock of %s failed", s.config.ProductName)
 		}
 		s.online = true
+
+		go func() {
+			<-w
+			// Refresh failed, close topo-server.
+			_ = s.Close()
+		}()
 	}
 
 	if !routines {

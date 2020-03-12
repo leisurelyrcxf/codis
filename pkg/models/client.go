@@ -25,6 +25,7 @@ type Client interface {
 
 	WatchInOrder(path string) (<-chan struct{}, []string, error)
 
+	CreateEphemeralWithTimeout(path string, data []byte, timeout time.Duration) (<-chan struct{}, error)
 	CreateEphemeral(path string, data []byte) (<-chan struct{}, error)
 	CreateEphemeralInOrder(path string, data []byte) (<-chan struct{}, string, error)
 }
