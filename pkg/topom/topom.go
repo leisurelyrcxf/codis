@@ -511,7 +511,7 @@ func (p *Topom) collectPrometheusMetrics() {
 	)
 
 	var (
-		proxyNamespace     = "proxy"
+		proxyNamespace     = "codis_proxy"
 
 		proxyHealthMetrics = map[string]string{
 			"up": "whether proxy's status is up",
@@ -576,7 +576,7 @@ func (p *Topom) collectPrometheusMetrics() {
 	)
 
 	var (
-		redisNamespace     = "redis"
+		redisNamespace     = p.config.Mode
 
 		redisHealthMetrics = map[string]string {
 			"up": "0",

@@ -54,6 +54,8 @@ sentinel_down_after = "30s"
 sentinel_failover_timeout = "5m"
 sentinel_notification_script = ""
 sentinel_client_reconfig_script = ""
+
+mode = "pika"
 `
 
 type Config struct {
@@ -83,6 +85,8 @@ type Config struct {
 	SentinelNotificationScript   string            `toml:"sentinel_notification_script" json:"sentinel_notification_script"`
 	SentinelClientReconfigScript string            `toml:"sentinel_client_reconfig_script" json:"sentinel_client_reconfig_script"`
 	MaxSlotNum                   int               `toml:"max_slot_num" json:"max_slot_num"`
+
+	Mode                         string             `toml:"mode" json:"mode"`
 
 	PrometheusReportPeriod       timesize.Duration  `toml:"prometheus_report_period" json:"prometheus_report_period"`
 }
