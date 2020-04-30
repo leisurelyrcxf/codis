@@ -507,6 +507,7 @@ func (p *Topom) collectPrometheusMetrics() {
 	const (
 		LabelProductName = "product_name"
 		LabelAddr        = "addr"
+		LabelPid         = "pid_in_group"
 		NanValue         = -1.0
 	)
 
@@ -649,6 +650,8 @@ func (p *Topom) collectPrometheusMetrics() {
 			"used_memory_lua": "37888",
 			"used_memory_peak": "2294568",
 			"used_memory_rss": "5595136",
+			"db_size": "0",
+			"log_size": "0",
 		}
 
 		redisGauges        = make(map[string]*prometheus.GaugeVec)
@@ -689,6 +692,7 @@ func (p *Topom) collectPrometheusMetrics() {
 					}, []string{
 						LabelProductName,
 						LabelAddr,
+						LabelPid,
 					},
 				)
 				redisGauges[gaugeName] = gaugeVec
@@ -706,6 +710,8 @@ func (p *Topom) collectPrometheusMetrics() {
 	)
 
 	period = math2.MaxDuration(time.Second, period)
+
+	firstRun := true
 
 	p.startMetricsReporter(period, func() error {
 		stats, err := p.Stats()
@@ -760,11 +766,12 @@ func (p *Topom) collectPrometheusMetrics() {
 			// Redis metrics
 			for _, g := range stats.Group.Models {
 				for i, x := range g.Servers {
+					pid := fmt.Sprintf("%d", i)
 					var addr = x.Addr
 
 					rs := stats.Group.Stats[addr]
-					redisGaugeUp := redisGauges["up"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr})
-					redisGaugeOK := redisGauges["ok"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr})
+					redisGaugeUp := redisGauges["up"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr, LabelPid: pid})
+					redisGaugeOK := redisGauges["ok"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr, LabelPid: pid})
 
 					switch {
 					case rs == nil:
@@ -807,7 +814,9 @@ func (p *Topom) collectPrometheusMetrics() {
 							val = NanValue
 						} else {
 							if strVal, ok := rs.Stats[metric]; !ok {
-								log.Errorf("metric '%s' doesn't exist", metric)
+								if firstRun {
+									log.Warnf("metric '%s' doesn't exist", metric)
+								}
 								val = NanValue
 							} else {
 								val, err = strconv.ParseFloat(strVal, 64)
@@ -818,12 +827,14 @@ func (p *Topom) collectPrometheusMetrics() {
 							}
 						}
 
-						redisGauges[metric].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr}).Set(val)
+						redisGauges[metric].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr,
+							LabelPid: pid}).Set(val)
 					}
 				}
 			}
 		}
 
+		firstRun = false
 		return nil
 	}, func() {
 		for _, proxyGauge := range proxyGauges {
