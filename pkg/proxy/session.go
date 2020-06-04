@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -303,6 +304,8 @@ func (s *Session) handleRequest(r *Request, d *Router) error {
 		return s.handleRequestSlotsScan(r, d)
 	case "SLOTSMAPPING":
 		return s.handleRequestSlotsMapping(r, d)
+	case "SLOWLOG":
+		return s.handleRequestSlowLog(r, d)
 	default:
 		return d.dispatch(r)
 	}
@@ -631,6 +634,122 @@ func (s *Session) handleRequestSlotsMapping(r *Request, d *Router) error {
 		r.Resp = marshalToResp(d.GetSlot(int(slot)))
 		return nil
 	}
+}
+
+func (s *Session) handleRequestSlowLog(r *Request, d *Router) error {
+	if len(r.Multi) <= 1 {
+		r.Resp = redis.NewErrorf("ERR wrong number of arguments for 'SLOWLOG' command")
+		return nil
+	}
+	subCMD := strings.ToUpper(string(r.Multi[1].Value))
+	switch subCMD {
+	case "GET":
+		if len(r.Multi) <= 2 {
+			return s.handleRequestSlowLogGetAll(r, d)
+		}
+		switch maxLen, err := redis.Btoi64(r.Multi[2].Value); {
+		case err != nil:
+			r.Resp = redis.NewErrorf("ERR parse max len '%s' failed, %s", r.Multi[2].Value, err)
+			return nil
+		case maxLen < 0:
+			r.Resp = redis.NewErrorf("ERR parse max len '%s' failed, out of range", r.Multi[2].Value)
+			return nil
+		case maxLen == 0:
+			r.Resp = &redis.Resp{
+				Type:  redis.TypeString,
+				Value: []byte{},
+				Array: nil,
+			}
+			return nil
+		default:
+			return s.handleRequestSlowLogGet(r, d, maxLen)
+		}
+	case "LEN":
+		return s.handleRequestSlowLogLen(r, d)
+	default:
+		r.Resp = redis.NewErrorf("ERR unknown subcommand '%s' for 'SLOWLOG'", subCMD)
+		return nil
+	}
+}
+
+func (s *Session) handleRequestSlowLogLen(r *Request, d *Router) error {
+	addrs := d.Addrs()
+	var sub = r.MakeSubRequest(len(addrs))
+	for i := range sub {
+		sub[i].Multi = []*redis.Resp{
+			r.Multi[0],
+			r.Multi[1],
+		}
+
+		addr := addrs[i]
+		if dispatched := d.dispatchAddr(&sub[i], addr); !dispatched {
+			r.Resp = redis.NewErrorf("ERR backend server '%s' not found", addr)
+			return nil
+		}
+	}
+	r.Coalesce = func() error {
+		totalLen := int64(0)
+		for i := range sub {
+			if err := sub[i].Err; err != nil {
+				return err
+			}
+			switch resp := sub[i].Resp; {
+			case resp == nil:
+				return ErrRespIsRequired
+			case resp.IsInt():
+				l, err := redis.Btoi64(resp.Value)
+				if err != nil {
+					return err
+				}
+				totalLen += l
+			default:
+				return fmt.Errorf("bad SLOWLOG LEN resp: %s", resp.Type)
+			}
+		}
+		r.Resp = redis.NewInt(strconv.AppendInt(nil, totalLen, 10))
+		return nil
+	}
+	return nil
+}
+
+func (s *Session) handleRequestSlowLogGetAll(r *Request, d *Router) error {
+	addrs := d.Addrs()
+	var sub = r.MakeSubRequest(len(addrs))
+	for i := range sub {
+		sub[i].Multi = []*redis.Resp{
+			r.Multi[0],
+			r.Multi[1],
+		}
+
+		addr := addrs[i]
+		if dispatched := d.dispatchAddr(&sub[i], addr); !dispatched {
+			r.Resp = redis.NewErrorf("ERR backend server '%s' not found", addr)
+			return nil
+		}
+	}
+	r.Coalesce = func() error {
+		array := make([]*redis.Resp, 0, len(sub) * 64)
+		for _, s := range sub {
+			if err := s.Err; err != nil {
+				return err
+			}
+			switch resp := s.Resp; {
+			case resp == nil:
+				return ErrRespIsRequired
+			case resp.IsArray():
+				array = append(array, resp.Array...)
+			default:
+				return fmt.Errorf("bad SLOWLOG GET resp: %s array.len = %d", resp.Type, len(resp.Array))
+			}
+		}
+		r.Resp = redis.NewArray(array)
+		return nil
+	}
+	return nil
+}
+
+func (s *Session) handleRequestSlowLogGet(r *Request, d *Router, maxLen int64) error {
+	return nil
 }
 
 func (s *Session) incrOpTotal() {

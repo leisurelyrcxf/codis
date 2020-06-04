@@ -66,6 +66,10 @@ func (s *Router) Close() {
 func (s *Router) GetSlots() []*models.Slot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.getSlotsLocked()
+}
+
+func (s *Router) getSlotsLocked() []*models.Slot {
 	slots := make([]*models.Slot, s.config.MaxSlotNum)
 	for i := range s.slots {
 		slots[i] = s.slots[i].snapshot()
@@ -131,6 +135,24 @@ func (s *Router) KeepAlive() error {
 	s.pool.primary.KeepAlive()
 	s.pool.replica.KeepAlive()
 	return nil
+}
+
+func (s *Router) Addrs() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	slots := s.getSlotsLocked()
+
+	addrs := make(map[string]struct{})
+	for _, slot := range slots {
+		addrs[slot.BackendAddr] = struct{}{}
+	}
+
+	addrList := make([]string, 0, len(addrs))
+	for addr := range addrs {
+		addrList = append(addrList, addr)
+	}
+
+	return addrList
 }
 
 func (s *Router) isOnline() bool {
