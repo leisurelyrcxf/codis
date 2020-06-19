@@ -35,6 +35,10 @@ func (u *Usage) CPUTotal() time.Duration {
 	return u.Utime + u.Stime
 }
 
+func (u *Usage) MemPercentage() float64 {
+	return 0.0
+}
+
 func GetUsage() (*Usage, error) {
 	var usage syscall.Rusage
 	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &usage); err != nil {

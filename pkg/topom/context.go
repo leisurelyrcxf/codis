@@ -65,11 +65,11 @@ func (ctx *context) isSlotLocked(m *models.SlotMapping) bool {
 	switch m.Action.State {
 	case models.ActionNothing, models.ActionPending:
 		return ctx.isGroupLocked(m.GroupId)
-	case models.ActionPreparing:
+	case models.ActionPreparing, models.ActionWatching:
 		return ctx.isGroupLocked(m.GroupId)
 	case models.ActionPrepared:
 		return true
-	case models.ActionMigrating:
+	case models.ActionMigrating, models.ActionCleanup:
 		return ctx.isGroupLocked(m.GroupId) || ctx.isGroupLocked(m.Action.TargetId)
 	case models.ActionFinished:
 		return ctx.isGroupLocked(m.Action.TargetId)
@@ -91,12 +91,12 @@ func (ctx *context) toSlot(m *models.SlotMapping, p *models.Proxy) *models.Slot 
 		slot.BackendAddr = ctx.getGroupMaster(m.GroupId)
 		slot.BackendAddrGroupId = m.GroupId
 		slot.ReplicaGroups = ctx.toReplicaGroups(m.GroupId, p)
-	case models.ActionPreparing:
+	case models.ActionPreparing, models.ActionWatching:
 		slot.BackendAddr = ctx.getGroupMaster(m.GroupId)
 		slot.BackendAddrGroupId = m.GroupId
 	case models.ActionPrepared:
 		fallthrough
-	case models.ActionMigrating:
+	case models.ActionMigrating, models.ActionCleanup:
 		slot.BackendAddr = ctx.getGroupMaster(m.Action.TargetId)
 		slot.BackendAddrGroupId = m.Action.TargetId
 		slot.MigrateFrom = ctx.getGroupMaster(m.GroupId)
@@ -238,6 +238,17 @@ func (ctx *context) getGroupMaster(gid int) string {
 	return ""
 }
 
+func (ctx *context) getGroupSlaves(gid int) []string {
+	if g := ctx.group[gid]; g != nil && len(g.Servers) > 1 {
+		slaves := []string{}
+		for i := 1; i < len(g.Servers); i++ {
+			slaves = append(slaves, g.Servers[i].Addr)
+		}
+		return slaves
+	}
+	return []string{}
+}
+
 func (ctx *context) getGroupMasters() map[int]string {
 	var masters = make(map[int]string)
 	for _, g := range ctx.group {
@@ -271,6 +282,8 @@ func (ctx *context) isGroupLocked(gid int) bool {
 		case models.ActionNothing:
 			return false
 		case models.ActionPreparing:
+			return false
+		case models.ActionWatching:
 			return false
 		case models.ActionPrepared:
 			return true

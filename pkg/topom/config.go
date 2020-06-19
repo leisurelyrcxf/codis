@@ -76,6 +76,7 @@ type Config struct {
 	MigrationAsyncMaxBytes bytesize.Int64    `toml:"migration_async_maxbytes" json:"migration_async_maxbytes"`
 	MigrationAsyncNumKeys  int               `toml:"migration_async_numkeys" json:"migration_async_numkeys"`
 	MigrationTimeout       timesize.Duration `toml:"migration_timeout" json:"migration_timeout"`
+	MigrationGap           uint64            `toml:"migration_gap" json:"migration_gap"`
 
 	SentinelClientTimeout        timesize.Duration `toml:"sentinel_client_timeout" json:"sentinel_client_timeout"`
 	SentinelQuorum               int               `toml:"sentinel_quorum" json:"sentinel_quorum"`
@@ -86,9 +87,9 @@ type Config struct {
 	SentinelClientReconfigScript string            `toml:"sentinel_client_reconfig_script" json:"sentinel_client_reconfig_script"`
 	MaxSlotNum                   int               `toml:"max_slot_num" json:"max_slot_num"`
 
-	Mode                         string             `toml:"mode" json:"mode"`
+	Mode string `toml:"mode" json:"mode"`
 
-	PrometheusReportPeriod       timesize.Duration  `toml:"prometheus_report_period" json:"prometheus_report_period"`
+	PrometheusReportPeriod timesize.Duration `toml:"prometheus_report_period" json:"prometheus_report_period"`
 }
 
 func NewDefaultConfig() *Config {
