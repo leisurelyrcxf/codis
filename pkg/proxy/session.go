@@ -6,6 +6,7 @@ package proxy
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"strconv"
 	"strings"
@@ -651,7 +652,7 @@ func (s *Session) handleRequestSlowLog(r *Request, d *Router) error {
 		case err != nil:
 			r.Resp = redis.NewErrorf("ERR parse max len '%s' failed, %s", r.Multi[2].Value, err)
 			return nil
-		case maxLen < 0:
+		case maxLen < 0 || maxLen > math.MaxInt32:
 			r.Resp = redis.NewErrorf("ERR parse max len '%s' failed, out of range", r.Multi[2].Value)
 			return nil
 		case maxLen == 0:
@@ -662,7 +663,7 @@ func (s *Session) handleRequestSlowLog(r *Request, d *Router) error {
 			}
 			return nil
 		default:
-			return s.handleRequestSlowLogGet(r, d, maxLen)
+			return s.handleRequestSlowLogGet(r, d, int(maxLen))
 		}
 	case "LEN":
 		return s.handleRequestSlowLogLen(r, d)
@@ -748,7 +749,43 @@ func (s *Session) handleRequestSlowLogGetAll(r *Request, d *Router) error {
 	return nil
 }
 
-func (s *Session) handleRequestSlowLogGet(r *Request, d *Router, maxLen int64) error {
+func (s *Session) handleRequestSlowLogGet(r *Request, d *Router, maxLen int) error {
+	addrs := d.Addrs()
+	var sub = r.MakeSubRequest(len(addrs))
+	for i := range sub {
+		sub[i].Multi = []*redis.Resp{
+			r.Multi[0],
+			r.Multi[1],
+			r.Multi[2],
+		}
+
+		addr := addrs[i]
+		if dispatched := d.dispatchAddr(&sub[i], addr); !dispatched {
+			r.Resp = redis.NewErrorf("ERR backend server '%s' not found", addr)
+			return nil
+		}
+	}
+	r.Coalesce = func() error {
+		array := make([]*redis.Resp, 0, len(sub) * maxLen)
+		for _, s := range sub {
+			if err := s.Err; err != nil {
+				return err
+			}
+			switch resp := s.Resp; {
+			case resp == nil:
+				return ErrRespIsRequired
+			case resp.IsArray():
+				array = append(array, resp.Array...)
+			default:
+				return fmt.Errorf("bad SLOWLOG GET resp: %s array.len = %d", resp.Type, len(resp.Array))
+			}
+		}
+		if len(array) > maxLen {
+			array = array[:maxLen]
+		}
+		r.Resp = redis.NewArray(array)
+		return nil
+	}
 	return nil
 }
 

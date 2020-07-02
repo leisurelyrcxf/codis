@@ -142,17 +142,16 @@ func (s *Router) Addrs() []string {
 	defer s.mu.RUnlock()
 	slots := s.getSlotsLocked()
 
-	addrs := make(map[string]struct{})
+	uniqueAddrs := make(map[string]struct{})
 	for _, slot := range slots {
-		addrs[slot.BackendAddr] = struct{}{}
+		uniqueAddrs[slot.BackendAddr] = struct{}{}
 	}
 
-	addrList := make([]string, 0, len(addrs))
-	for addr := range addrs {
-		addrList = append(addrList, addr)
+	addrs := make([]string, 0, len(uniqueAddrs))
+	for addr := range uniqueAddrs {
+		addrs = append(addrs, addr)
 	}
-
-	return addrList
+	return addrs
 }
 
 func (s *Router) isOnline() bool {
