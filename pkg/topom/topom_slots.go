@@ -4,16 +4,20 @@
 package topom
 
 import (
-	"sort"
-	"time"
-
-	rbtree "github.com/emirpasic/gods/trees/redblacktree"
-
+	gocontext "context"
 	"github.com/CodisLabs/codis/pkg/models"
+	"github.com/CodisLabs/codis/pkg/utils"
 	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/log"
 	"github.com/CodisLabs/codis/pkg/utils/math2"
 	"github.com/CodisLabs/codis/pkg/utils/redis"
+	rbtree "github.com/emirpasic/gods/trees/redblacktree"
+	redigo "github.com/garyburd/redigo/redis"
+	"net"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
 )
 
 func (s *Topom) SlotCreateAction(sid int, gid int) error {
@@ -240,119 +244,18 @@ func (s *Topom) SlotActionPrepareFilter(accept, update func(m *models.SlotMappin
 	log.Warnf("slot-[%d] action prepare:\n%s", m.Id, m.Encode())
 
 	switch m.Action.State {
-
 	case models.ActionPending:
-
 		defer s.dirtySlotsCache(m.Id)
-
 		m.Action.State = models.ActionPreparing
 		if err := s.storeUpdateSlotMapping(m); err != nil {
 			return 0, false, err
 		}
 
-		fallthrough
-
-	case models.ActionPreparing:
-
-		defer s.dirtySlotsCache(m.Id)
-
-		log.Warnf("slot-[%d] resync to prepared", m.Id)
-
-		m.Action.State = models.ActionPrepared
-		if err := s.resyncSlotMappings(ctx, m); err != nil {
-			log.Warnf("slot-[%d] resync-rollback to preparing", m.Id)
-			m.Action.State = models.ActionPreparing
-			s.resyncSlotMappings(ctx, m)
-			log.Warnf("slot-[%d] resync-rollback to preparing, done", m.Id)
-			return 0, false, err
-		}
-		if err := s.storeUpdateSlotMapping(m); err != nil {
-			return 0, false, err
-		}
-
-		fallthrough
-
-	case models.ActionPrepared:
-
-		defer s.dirtySlotsCache(m.Id)
-
-		log.Warnf("slot-[%d] resync to migrating", m.Id)
-
-		m.Action.State = models.ActionMigrating
-		if err := s.resyncSlotMappings(ctx, m); err != nil {
-			log.Warnf("slot-[%d] resync to migrating failed", m.Id)
-			return 0, false, err
-		}
-		if err := s.storeUpdateSlotMapping(m); err != nil {
-			return 0, false, err
-		}
-
-		fallthrough
-
-	case models.ActionMigrating:
-
-		return m.Id, true, nil
-
-	case models.ActionFinished:
-
-		return m.Id, true, nil
-
 	default:
-
-		return 0, false, errors.Errorf("slot-[%d] action state is invalid", m.Id)
-
-	}
-}
-
-func (s *Topom) SlotActionComplete(sid int) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ctx, err := s.newContext()
-	if err != nil {
-		return err
+		return m.Id, true, nil
 	}
 
-	m, err := ctx.getSlotMapping(sid)
-	if err != nil {
-		return err
-	}
-
-	log.Warnf("slot-[%d] action complete:\n%s", m.Id, m.Encode())
-
-	switch m.Action.State {
-
-	case models.ActionMigrating:
-
-		defer s.dirtySlotsCache(m.Id)
-
-		m.Action.State = models.ActionFinished
-		if err := s.storeUpdateSlotMapping(m); err != nil {
-			return err
-		}
-
-		fallthrough
-
-	case models.ActionFinished:
-
-		log.Warnf("slot-[%d] resync to finished", m.Id)
-
-		if err := s.resyncSlotMappings(ctx, m); err != nil {
-			log.Warnf("slot-[%d] resync to finished failed", m.Id)
-			return err
-		}
-		defer s.dirtySlotsCache(m.Id)
-
-		m = &models.SlotMapping{
-			Id:      m.Id,
-			GroupId: m.Action.TargetId,
-		}
-		return s.storeUpdateSlotMapping(m)
-
-	default:
-
-		return errors.Errorf("slot-[%d] action state is invalid", m.Id)
-
-	}
+	return m.Id, true, nil
 }
 
 func (s *Topom) newSlotActionExecutor(sid int) (func(db int) (remains int, nextdb int, err error), error) {
@@ -712,4 +615,295 @@ func (s *Topom) SlotsRebalance(confirm bool) (map[int]int, error) {
 		}
 	}
 	return plans, nil
+}
+
+func (s *Topom) syncSlot(m *models.SlotMapping) error {
+	ctx, err := s.newContext()
+	if err != nil {
+		return err
+	}
+	if s.action.disabled.IsTrue() {
+		return errors.Errorf("slot-[%d] sync slot, disabled", m.Id)
+	}
+	if ctx.isGroupPromoting(m.GroupId) {
+		return errors.Errorf("slot-[%d] sync slot, Source group-[%d] is promoting", m.Id, m.GroupId)
+	}
+	if ctx.isGroupPromoting(m.Action.TargetId) {
+		return errors.Errorf("slot-[%d] sync slot, Target group-[%d] is promoting", m.Id, m.Action.TargetId)
+	}
+
+	sourceAddress := ctx.getGroupMaster(m.GroupId)
+	targetAddress := ctx.getGroupMaster(m.Action.TargetId)
+	if sourceAddress == "" || targetAddress == "" {
+		return nil
+	}
+	sourceHost, sourcePort, sourceSplitErr := net.SplitHostPort(sourceAddress)
+	if sourceSplitErr != nil {
+		log.Errorf("slot-[%d] sync slot, source[%s] address not validate, %v ", m.Id, sourceAddress, sourceSplitErr)
+		return nil
+	}
+	_, _, targetSplitErr := net.SplitHostPort(targetAddress)
+	if targetSplitErr != nil {
+		log.Errorf("slot-[%d] sync slot, source[%s] address not validate, %v ", m.Id, targetAddress, targetSplitErr)
+		return nil
+	}
+
+	targetCli, targetErr := s.action.redisp.GetClient(targetAddress)
+	if targetErr != nil {
+		return targetErr
+	}
+	defer s.action.redisp.PutClient(targetCli)
+
+	_, addSlotsErr := targetCli.Do("pkcluster", "addslots", m.Id)
+	if addSlotsErr != nil {
+		targetCli, targetErr = s.action.redisp.GetClient(targetAddress)
+	}
+	if _, err := targetCli.Do("pkcluster", "slotsslaveof", sourceHost, sourcePort, m.Id); err != nil {
+		return err
+	}
+
+	sourceCli, sourceErr := s.action.redisp.GetClient(sourceAddress)
+	if sourceErr != nil {
+		return sourceErr
+	}
+	defer s.action.redisp.PutClient(sourceCli)
+
+	time.Sleep(time.Second * 1)
+	if retryErr := utils.RetryInSecond(100, func() error {
+		infoReply, infoErr := sourceCli.Do("pkcluster", "info", "slot", m.Id)
+		if infoErr != nil {
+			return infoErr
+		}
+		//(db0:2) binlog_offset=122 28755832,safety_purge=write2file112\r\n  Role: Master\r\n  connected_slaves: 1\r\n  slave[0]: 10.129.100.194:6381\r\n  replication_status: SlaveBinlogSync\r\n  lag: 0\r\n\r\n
+		infoReplyStr, infoReplyErr := redigo.String(infoReply, nil)
+		if infoReplyErr != nil {
+			return infoReplyErr
+		}
+		log.Infof("slot-[%d] sync slot info reply:%s", m.Id, infoReplyStr)
+		if strings.Contains(infoReplyStr, targetAddress) {
+			log.Infof("slot-[%d] sync slot success ", m.Id)
+			return nil
+		}
+		return errors.Errorf("slot-[%d] sync slot, validate fail, retry ... ", m.Id)
+	}); retryErr != nil {
+		return errors.Errorf("slot-[%d] sync slot, validate relation fail", m.Id)
+	}
+
+	return nil
+}
+
+func (s *Topom) watchSlot(m *models.SlotMapping) error {
+	ctx, err := s.newContext()
+	if err != nil {
+		return errors.Errorf("slot-[%d] watch slot get ctx fail, %v ", m.Id, err)
+	}
+	sourceAddress := ctx.getGroupMaster(m.GroupId)
+	targetAddress := ctx.getGroupMaster(m.Action.TargetId)
+	if sourceAddress == "" || targetAddress == "" {
+		return nil
+	}
+
+	var gap = math2.MaxUInt64(100000, s.config.MigrationGap)
+	if compareErr := s.compareSlot(m.Id, sourceAddress, targetAddress, gap); compareErr != nil {
+		return compareErr
+	}
+
+	log.Infof("slot-[%d] watch slot prepare for detach success, gap reached %v, let's detach.", m.Id, gap)
+
+	go func() {
+		waitDetach := make(chan bool)
+		ctxDetach, cancelDetach := gocontext.WithTimeout(gocontext.Background(), 24*time.Hour)
+		defer cancelDetach()
+		go func(ctx gocontext.Context) {
+			for {
+				select {
+				case <-ctx.Done():
+					log.Errorf("slot-[%d] watch slot timeout ", m.Id)
+					waitDetach <- true
+					return
+				default:
+					log.Infof("slot-[%d] watch slot ... ", m.Id)
+					time.Sleep(time.Second * 2)
+				}
+
+				if compareErr := s.compareSlot(m.Id, sourceAddress, targetAddress, 0); compareErr != nil {
+					continue
+				}
+				log.Infof("slot-[%d] watch slot compare success.", m.Id)
+
+				if detachErr := s.detachSlot(m.Id, targetAddress); detachErr != nil {
+					log.Errorf("slot-[%d] watch slot detach fail, %v ", m.Id, detachErr)
+					continue
+				}
+
+				log.Infof("slot-[%d] watch slot detach success.", m.Id)
+				waitDetach <- true
+				return
+			}
+
+		}(ctxDetach)
+
+		<-waitDetach
+	}()
+
+	return nil
+}
+
+func (s *Topom) cleanupSlot(m *models.SlotMapping) error {
+	ctx, err := s.newContext()
+	if err != nil {
+		return err
+	}
+	if s.action.disabled.IsTrue() {
+		return errors.Errorf("slot-[%d] sync slot, disabled", m.Id)
+	}
+	if ctx.isGroupPromoting(m.GroupId) {
+		return errors.Errorf("slot-[%d] sync slot, Source group-[%d] is promoting", m.Id, m.GroupId)
+	}
+	if ctx.isGroupPromoting(m.Action.TargetId) {
+		return errors.Errorf("slot-[%d] sync slot, Target group-[%d] is promoting", m.Id, m.Action.TargetId)
+	}
+
+	sourceMasterAddress := ctx.getGroupMaster(m.GroupId)
+	targetMasterAddress := ctx.getGroupMaster(m.Action.TargetId)
+	if sourceMasterAddress == "" || targetMasterAddress == "" {
+		return nil
+	}
+
+	sourceSlavesAddress := ctx.getGroupSlaves(m.GroupId)
+	for _, slaveAddress := range sourceSlavesAddress {
+		if err := s.detachSlot(m.Id, slaveAddress); err != nil {
+			log.Errorf("slot-[%d] cleanup slot, detach source slaves slot fail, slave address:%v, %v ", m.Id, slaveAddress, err)
+		}
+	}
+	time.Sleep(time.Second * 2)
+	for _, slaveAddress := range sourceSlavesAddress {
+		if err := s.cleanSlot(m.Id, slaveAddress); err != nil {
+			log.Errorf("slot-[%d] cleanup slot, clean source slaves slot fail, slave address:%v, %v ", m.Id, slaveAddress, err)
+		}
+	}
+	time.Sleep(time.Second * 2)
+	if err := s.cleanSlot(m.Id, sourceMasterAddress); err != nil {
+		log.Errorf("slot-[%d] cleanup slot detach fail, source address:%v, %v ", m.Id, sourceMasterAddress, err)
+	}
+
+	targetSlavesAddress := ctx.getGroupSlaves(m.Action.TargetId)
+	for _, slaveAddress := range targetSlavesAddress {
+		if err := s.backupSlot(m.Id, targetMasterAddress, slaveAddress); err != nil {
+			log.Errorf("slot-[%d] cleanup slot, backup target slaves slot fail, target:%v, slave: %v, %v ", m.Id, targetMasterAddress, slaveAddress, err)
+		}
+	}
+
+	return nil
+}
+
+func (s *Topom) cleanSlot(slot int, address string) error {
+	cli, err := s.action.redisp.GetClient(address)
+	if err != nil {
+		return err
+	}
+	defer s.action.redisp.PutClient(cli)
+
+	if _, err := cli.Do("pkcluster", "delslots", slot); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Topom) backupSlot(slot int, masterAddress, slaveAddress string) error {
+	cli, err := s.action.redisp.GetClient(slaveAddress)
+	if err != nil {
+		return err
+	}
+	defer s.action.redisp.PutClient(cli)
+
+	masterHost, masterPort, splitErr := net.SplitHostPort(masterAddress)
+	if splitErr != nil {
+		return splitErr
+	}
+
+	_, addSlotsErr := cli.Do("pkcluster", "addslots", slot)
+	if addSlotsErr != nil {
+		cli, err = s.action.redisp.GetClient(slaveAddress)
+	}
+	if _, err := cli.Do("pkcluster", "slotsslaveof", masterHost, masterPort, slot); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Topom) compareSlot(slot int, sourceAddress, targetAddress string, gap uint64) error {
+	cli, err := s.action.redisp.GetClient(sourceAddress)
+	if err != nil {
+		return err
+	}
+	defer s.action.redisp.PutClient(cli)
+
+	infoReply, infoErr := cli.Do("pkcluster", "info", "slot", slot)
+	if infoErr != nil {
+		return infoErr
+	}
+	infoReplyStr, infoReplyErr := redigo.String(infoReply, nil)
+	if infoReplyErr != nil {
+		return infoReplyErr
+	}
+
+	// (db0:2) binlog_offset=0 13384104,safety_purge=none
+	//   Role: Master
+	//   connected_slaves: 2
+	//   slave[0]: 10.233.100.186:6384
+	//   replication_status: SlaveBinlogSync
+	//   lag: 0
+	//   slave[1]: 10.233.100.186:6381
+	//   replication_status: SlaveBinlogSync
+	//   lag: 7658842
+
+	//(db0:2) binlog_offset=0 13334816,safety_purge=none\r\n  Role: Master\r\n  connected_slaves: 2\r\n  slave[0]: 10.233.100.186:6383\r\n  replication_status: SlaveBinlogSync\r\n  lag: 0\r\n  slave[1]: 10.233.100.186:6382\r\n  replication_status: SlaveBinlogSync\r\n  lag: 4894842\r\n\r\n"
+	//log.Infof("compare infoReplyStr:%v", infoReplyStr)
+	infoReplySlice := strings.Split(infoReplyStr, "\r\n")
+	var lag uint64
+	var lagErr error
+	var isTarget, isRepl bool
+	for _, slice := range infoReplySlice {
+		field := strings.Split(slice, ": ")
+		if len(field) < 2 {
+			continue
+		}
+		//log.Infof("compare isTarget:%v, isRepl:%v, field[0]:%v, field[1]:%v", isTarget, isRepl, field[0], field[1])
+		if strings.HasPrefix(strings.TrimSpace(field[0]), "slave") && strings.TrimSpace(field[1]) == strings.TrimSpace(targetAddress) {
+			isTarget = true
+		}
+		if isTarget && strings.TrimSpace(field[0]) == "replication_status" && strings.TrimSpace(field[1]) == "SlaveBinlogSync" {
+			isRepl = true
+		}
+		if isTarget && isRepl && strings.TrimSpace(field[0]) == "lag" {
+			lag, lagErr = strconv.ParseUint(strings.TrimSpace(field[1]), 10, 64)
+			if lagErr != nil {
+				return lagErr
+			}
+			if lag <= gap {
+				log.Infof("slot-[%d] compare success, lag:%d <= gap:%d", slot, lag, gap)
+				return nil
+			}
+			isTarget = false
+			isRepl = true
+		}
+	}
+
+	return errors.Errorf("slot-[%d] compare,lag:%v,gap:%v", slot, lag, gap)
+}
+
+func (s *Topom) detachSlot(slot int, address string) error {
+	cli, err := s.action.redisp.GetClient(address)
+	if err != nil {
+		return err
+	}
+	defer s.action.redisp.PutClient(cli)
+
+	if _, err := cli.Do("pkcluster", "slotsslaveof", "no", "one", slot); err != nil {
+		return err
+	}
+
+	return nil
 }

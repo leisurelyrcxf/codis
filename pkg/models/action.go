@@ -7,8 +7,10 @@ const (
 	ActionNothing   = ""
 	ActionPending   = "pending"
 	ActionPreparing = "preparing"
+	ActionWatching  = "watching"
 	ActionPrepared  = "prepared"
 	ActionMigrating = "migrating"
+	ActionCleanup   = "cleanup"
 	ActionFinished  = "finished"
 	ActionSyncing   = "syncing"
 )
