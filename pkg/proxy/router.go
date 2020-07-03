@@ -133,6 +133,21 @@ func (s *Router) KeepAlive() error {
 	return nil
 }
 
+func (s *Router) Addrs() []string {
+	slots := s.GetSlots()
+
+	addrs := []string{}
+	addrsMap := map[string]bool{}
+	for _, slot := range slots {
+		if addrsMap[slot.BackendAddr] {
+			continue
+		}
+		addrs = append(addrs, slot.BackendAddr)
+		addrsMap[slot.BackendAddr] = true
+	}
+	return addrs
+}
+
 func (s *Router) isOnline() bool {
 	return s.online && !s.closed
 }

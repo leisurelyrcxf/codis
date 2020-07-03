@@ -214,7 +214,7 @@ func init() {
 		{"SLOTSRESTORE-ASYNC-AUTH", FlagWrite | FlagNotAllow},
 		{"SLOTSRESTORE-ASYNC-ACK", FlagWrite | FlagNotAllow},
 		{"SLOTSSCAN", FlagMasterOnly},
-		{"SLOWLOG", FlagNotAllow},
+		{"SLOWLOG", FlagMasterOnly},
 		{"SMEMBERS", 0},
 		{"SMOVE", FlagWrite},
 		{"SORT", FlagWrite},
