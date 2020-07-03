@@ -136,14 +136,14 @@ func (s *Router) KeepAlive() error {
 func (s *Router) Addrs() []string {
 	slots := s.GetSlots()
 
-	uniqueAddrs := make(map[string]struct{})
+	addrs := []string{}
+	addrsMap := map[string]bool{}
 	for _, slot := range slots {
-		uniqueAddrs[slot.BackendAddr] = struct{}{}
-	}
-
-	addrs := make([]string, 0, len(uniqueAddrs))
-	for addr := range uniqueAddrs {
-		addrs = append(addrs, addr)
+		if addrsMap[slot.BackendAddr] {
+			continue
+		}
+		addrs = append(addrs, slot.BackendAddr)
+		addrsMap[slot.BackendAddr] = true
 	}
 	return addrs
 }
