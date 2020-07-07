@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/CodisLabs/codis/pkg/models"
+	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/log"
 	"github.com/CodisLabs/codis/pkg/utils/math2"
 	"github.com/CodisLabs/codis/pkg/utils/sync2"
@@ -53,84 +54,80 @@ func (s *Topom) ProcessSlotAction() error {
 		for sid, _ := range plans {
 			fut.Add()
 			go func(sid int) {
-				ctx, err := s.newContext()
-				if err != nil {
+				var ctx *context
+				var err error
+				var m *models.SlotMapping
+
+				defer fut.Done(strconv.Itoa(sid), err)
+
+				if ctx, err = s.newContext(); err != nil {
 					log.Errorf("slot-[%d] new context fail, %v", sid, err)
 					return
 				}
-				m, err := ctx.getSlotMapping(sid)
-				if err != nil {
+				if m, err = ctx.getSlotMapping(sid); err != nil {
 					log.Errorf("slot-[%d] get slot mapping fail, %v", sid, err)
 					return
 				}
 
 				switch m.Action.State {
 				case models.ActionPreparing:
-					if err := s.preparingSlotAction(sid); err != nil {
+					if err = s.preparingSlotAction(sid); err != nil {
 						status := fmt.Sprintf("[ERROR] Slot[%04d]: %s", sid, err)
 						s.action.progress.status.Store(status)
-						fut.Done(strconv.Itoa(sid), err)
 						return
 					}
 					s.action.progress.status.Store("")
 					fallthrough
 
 				case models.ActionWatching:
-					if err := s.watchingSlotAction(sid); err != nil {
+					if err = s.watchingSlotAction(sid); err != nil {
 						status := fmt.Sprintf("[ERROR] Slot[%04d]: %s", sid, err)
 						s.action.progress.status.Store(status)
-						fut.Done(strconv.Itoa(sid), err)
 						return
 					}
 					s.action.progress.status.Store("")
 					fallthrough
 
 				case models.ActionPrepared:
-					if err := s.preparedSlotAction(sid); err != nil {
+					if err = s.preparedSlotAction(sid); err != nil {
 						status := fmt.Sprintf("[ERROR] Slot[%04d]: %s", sid, err)
 						s.action.progress.status.Store(status)
-						fut.Done(strconv.Itoa(sid), err)
 						return
 					}
 					s.action.progress.status.Store("")
 					fallthrough
 
 				case models.ActionMigrating:
-					err := s.migratingSlotAction(sid)
+					err = s.migratingSlotAction(sid)
 					if err != nil {
 						status := fmt.Sprintf("[ERROR] Slot[%04d]: %s", sid, err)
 						s.action.progress.status.Store(status)
-						fut.Done(strconv.Itoa(sid), err)
 						return
 					}
 					s.action.progress.status.Store("")
 					fallthrough
 
 				case models.ActionCleanup:
-					err := s.cleanupSlotAction(sid)
+					err = s.cleanupSlotAction(sid)
 					if err != nil {
 						status := fmt.Sprintf("[ERROR] Slot[%04d]: %s", sid, err)
 						s.action.progress.status.Store(status)
-						fut.Done(strconv.Itoa(sid), err)
 						return
 					}
 					s.action.progress.status.Store("")
 					fallthrough
 
 				case models.ActionFinished:
-					err := s.finishedSlotAction(sid)
+					err = s.finishedSlotAction(sid)
 					if err != nil {
 						status := fmt.Sprintf("[ERROR] Slot[%04d]: %s", sid, err)
 						s.action.progress.status.Store(status)
-						fut.Done(strconv.Itoa(sid), err)
 						return
 					}
 					s.action.progress.status.Store("")
-					fut.Done(strconv.Itoa(sid), err)
 
 				default:
-					log.Errorf("slot-[%d] action state is invalid", sid)
-					fut.Done(strconv.Itoa(sid), err)
+					err = errors.Errorf("slot-[%d] action state is invalid", sid)
 					return
 
 				}
