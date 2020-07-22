@@ -58,7 +58,9 @@ func (s *Topom) ProcessSlotAction() error {
 				var err error
 				var m *models.SlotMapping
 
-				defer fut.Done(strconv.Itoa(sid), err)
+				defer func() {
+					fut.Done(strconv.Itoa(sid), err)
+				}()
 
 				if ctx, err = s.newContext(); err != nil {
 					log.Errorf("slot-[%d] new context fail, %v", sid, err)
