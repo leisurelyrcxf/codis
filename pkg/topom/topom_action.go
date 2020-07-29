@@ -53,6 +53,7 @@ func (s *Topom) ProcessSlotAction() error {
 		var fut sync2.Future
 		for sid, _ := range plans {
 			fut.Add()
+
 			go func(sid int) {
 				var ctx *context
 				var err error
