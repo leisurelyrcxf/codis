@@ -118,7 +118,7 @@ func (s *Topom) newProxyStats(p *models.Proxy, timeout time.Duration) *ProxyStat
 
 	go func() {
 		defer close(ch)
-		x, err := s.newProxyClient(p).StatsSimple()
+		x, err := s.newProxyClient(p).Stats(proxy.StatsFull)
 		if err != nil {
 			stats.Error = rpc.NewRemoteError(err)
 		} else {
