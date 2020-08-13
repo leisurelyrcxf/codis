@@ -8,25 +8,13 @@ import (
 	"crypto/md5"
 	"crypto/sha256"
 	"fmt"
-	"net"
-	"sort"
 )
 
 func NewToken(segs ...string) string {
-	var list []string
-	ifs, _ := net.Interfaces()
-	for _, i := range ifs {
-		addr := i.HardwareAddr.String()
-		if addr != "" {
-			list = append(list, addr)
-		}
-	}
-	sort.Strings(list)
-
 	t := &bytes.Buffer{}
-	fmt.Fprintf(t, "Codis-Token@%v", list)
+	_, _ = fmt.Fprintf(t, "Codis-Token")
 	for _, s := range segs {
-		fmt.Fprintf(t, "-{%s}", s)
+		_, _ = fmt.Fprintf(t, "-{%s}", s)
 	}
 	b := md5.Sum(t.Bytes())
 	return fmt.Sprintf("%x", b)
