@@ -509,54 +509,65 @@ func (p *Topom) collectPrometheusMetrics() {
 		LabelAddr        = "addr"
 		LabelPid         = "pid_in_group"
 		NanValue         = -1.0
+		LabelCmdName     = "cmd_name"
 	)
 
 	var (
-		proxyNamespace     = "codis_proxy"
+		proxyNamespace = "codis_proxy"
 
 		proxyHealthMetrics = map[string]string{
 			"up": "whether proxy's status is up",
 		}
 
-		proxyMetrics       = map[string]string{
-			"ops_total": "total operations",
-			"ops_fails": "total failed operations",
-			"ops_redis_errors": "redis errors number",
-			"ops_qps": "operations QPS",
-			"sessions_total": "total session number",
-			"sessions_alive": "alive session number",
-			"sessions_max": "max session number",
-			"rusage_mem": "rusage memory",
-			"rusage_mem_percentage": "rusage memory percentage",
-			"rusage_cpu": "rusage CPU",
-			"runtime_gc_num": "runtime GC number",
+		proxyMetrics = map[string]string{
+			"ops_total":                "total operations",
+			"ops_fails":                "total failed operations",
+			"ops_redis_errors":         "redis errors number",
+			"ops_qps":                  "operations QPS",
+			"sessions_total":           "total session number",
+			"sessions_alive":           "alive session number",
+			"sessions_max":             "max session number",
+			"rusage_mem":               "rusage memory",
+			"rusage_mem_percentage":    "rusage memory percentage",
+			"rusage_cpu":               "rusage CPU",
+			"runtime_gc_num":           "runtime GC number",
 			"runtime_gc_total_pausems": "runtime GC total pausems",
-			"runtime_num_procs": "runtime proc number",
-			"runtime_num_goroutines": "runtime goroutine number",
-			"runtime_num_cgo_call": "runtime cgo call number",
-			"runtime_num_mem_offheap": "runtime memory off-heap number",
+			"runtime_num_procs":        "runtime proc number",
+			"runtime_num_goroutines":   "runtime goroutine number",
+			"runtime_num_cgo_call":     "runtime cgo call number",
+			"runtime_num_mem_offheap":  "runtime memory off-heap number",
+			"runtime_heap_alloc":       "runtime heap alloc",
+			"runtime_heap_sys":         "runtime heap sys",
+			"runtime_heap_idle":        "runtime heap idle",
+			"runtime_heap_inuse":       "runtime heap inuse",
+			"runtime_heap_objects":     "runtime heap objects",
+			"runtime_general_alloc":    "runtime general alloc",
+			"runtime_general_sys":      "runtime general sys",
+			"runtime_general_lookups":  "runtime general lookups",
+			"runtime_general_mallocs":  "runtime general mallocs",
+			"runtime_general_frees":    "runtime general frees",
 		}
 
-		proxyGauges        = make(map[string]*prometheus.GaugeVec)
+		proxyGauges = make(map[string]*prometheus.GaugeVec)
 
-		emptyProxyStats    = &proxy.Stats{}
-		emptyRuntimeStats  = &proxy.RuntimeStats{}
+		emptyProxyStats   = &proxy.Stats{}
+		emptyRuntimeStats = &proxy.RuntimeStats{}
 
-		proxyStatsGetter   = func(ps *ProxyStats) *proxy.Stats {
+		proxyStatsGetter = func(ps *ProxyStats) *proxy.Stats {
 			if ps == nil || ps.Stats == nil {
 				return emptyProxyStats
 			}
 			return ps.Stats
 		}
 
-		proxyRStatsGetter  = func(ps *ProxyStats) *proxy.RuntimeStats {
-			if ps == nil || ps.Stats == nil || ps.Stats.Runtime == nil  {
+		proxyRStatsGetter = func(ps *ProxyStats) *proxy.RuntimeStats {
+			if ps == nil || ps.Stats == nil || ps.Stats.Runtime == nil {
 				return emptyRuntimeStats
 			}
 			return ps.Stats.Runtime
 		}
 
-		proxyFieldGetters  = map[string]proxyFieldGetter{
+		proxyFieldGetters = map[string]proxyFieldGetter{
 			"ops_total":                func(ps *ProxyStats) interface{} { return proxyStatsGetter(ps).Ops.Total },
 			"ops_fails":                func(ps *ProxyStats) interface{} { return proxyStatsGetter(ps).Ops.Fails },
 			"ops_redis_errors":         func(ps *ProxyStats) interface{} { return proxyStatsGetter(ps).Ops.Redis.Errors },
@@ -573,88 +584,110 @@ func (p *Topom) collectPrometheusMetrics() {
 			"runtime_num_goroutines":   func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).NumGoroutines },
 			"runtime_num_cgo_call":     func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).NumCgoCall },
 			"runtime_num_mem_offheap":  func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).MemOffheap },
+			"runtime_heap_alloc":       func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).Heap.Alloc },
+			"runtime_heap_sys":         func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).Heap.Sys },
+			"runtime_heap_idle":        func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).Heap.Idle },
+			"runtime_heap_inuse":       func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).Heap.Inuse },
+			"runtime_heap_objects":     func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).Heap.Objects },
+			"runtime_general_alloc":    func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).General.Alloc },
+			"runtime_general_sys":      func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).General.Sys },
+			"runtime_general_lookups":  func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).General.Lookups },
+			"runtime_general_mallocs":  func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).General.Mallocs },
+			"runtime_general_frees":    func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).General.Frees },
 		}
 	)
 
 	var (
-		redisNamespace     = p.config.Mode
+		cmdNamespace = "cmd"
 
-		redisHealthMetrics = map[string]string {
+		cmdMetrics = map[string]string{
+			"latency": "cmd latency",
+			"total":   "cmd total",
+			"failure": "cmd failure",
+		}
+
+		cmdGauges = make(map[string]*prometheus.GaugeVec)
+	)
+
+	var (
+		redisNamespace = p.config.Mode
+
+		redisHealthMetrics = map[string]string{
 			"up": "0",
 			"ok": "0",
 		}
 
-		redisMetrics       = map[string]string {
+		redisMetrics = map[string]string{
 			"aof_current_rewrite_time_sec": "-1",
-			"aof_enabled": "0",
+			"aof_enabled":                  "0",
 			//"aof_last_bgrewrite_status": "ok",
 			"aof_last_rewrite_time_sec": "-1",
 			//"aof_last_write_status": "ok",
-			"aof_rewrite_in_progress": "0",
-			"aof_rewrite_scheduled": "0",
-			"arch_bits": "64",
-			"blocked_clients": "0",
-			"client_biggest_input_buf": "0",
-			"client_longest_output_list": "0",
-			"cluster_enabled": "0",
-			"connected_clients": "1",
-			"connected_slaves": "0",
-			"evicted_keys": "0",
-			"expired_keys": "0",
-			"hz": "10",
-			"instantaneous_input_kbps": "0.03",
-			"instantaneous_ops_per_sec": "1",
-			"instantaneous_output_kbps": "1.38",
-			"keyspace_hits": "0",
-			"keyspace_misses": "0",
-			"latest_fork_usec": "0",
-			"loading": "0",
-			"lru_clock": "16750322",
-			"master_repl_offset": "0",
-			"maxmemory": "0",
-			"maxclients": "0",
-			"mem_fragmentation_ratio": "2.44",
-			"migrate_cached_sockets": "0",
-			"process_id": "31493",
-			"pubsub_channels": "0",
-			"pubsub_patterns": "0",
-			"rdb_bgsave_in_progress": "0",
+			"aof_rewrite_in_progress":     "0",
+			"aof_rewrite_scheduled":       "0",
+			"arch_bits":                   "64",
+			"blocked_clients":             "0",
+			"client_biggest_input_buf":    "0",
+			"client_longest_output_list":  "0",
+			"cluster_enabled":             "0",
+			"connected_clients":           "1",
+			"connected_slaves":            "0",
+			"evicted_keys":                "0",
+			"expired_keys":                "0",
+			"hz":                          "10",
+			"instantaneous_input_kbps":    "0.03",
+			"instantaneous_ops_per_sec":   "1",
+			"instantaneous_output_kbps":   "1.38",
+			"keyspace_hits":               "0",
+			"keyspace_misses":             "0",
+			"latest_fork_usec":            "0",
+			"loading":                     "0",
+			"lru_clock":                   "16750322",
+			"master_repl_offset":          "0",
+			"maxmemory":                   "0",
+			"maxclients":                  "0",
+			"mem_fragmentation_ratio":     "2.44",
+			"migrate_cached_sockets":      "0",
+			"process_id":                  "31493",
+			"pubsub_channels":             "0",
+			"pubsub_patterns":             "0",
+			"rdb_bgsave_in_progress":      "0",
 			"rdb_changes_since_last_save": "0",
 			"rdb_current_bgsave_time_sec": "-1",
 			//"rdb_last_bgsave_status": "ok",
-			"rdb_last_bgsave_time_sec": "-1",
-			"rdb_last_save_time": "1577029758",
-			"redis_git_dirty": "0",
-			"rejected_connections": "0",
-			"repl_backlog_active": "0",
+			"rdb_last_bgsave_time_sec":       "-1",
+			"rdb_last_save_time":             "1577029758",
+			"redis_git_dirty":                "0",
+			"rejected_connections":           "0",
+			"repl_backlog_active":            "0",
 			"repl_backlog_first_byte_offset": "0",
-			"repl_backlog_histlen": "0",
-			"repl_backlog_size": "1048576",
+			"repl_backlog_histlen":           "0",
+			"repl_backlog_size":              "1048576",
 			//"role": "master",
-			"sync_full": "0",
-			"sync_partial_err": "0",
-			"sync_partial_ok": "0",
-			"tcp_port": "56379",
-			"total_commands_processed": "2096",
+			"sync_full":                  "0",
+			"sync_partial_err":           "0",
+			"sync_partial_ok":            "0",
+			"tcp_port":                   "56379",
+			"total_commands_processed":   "2096",
 			"total_connections_received": "4",
-			"total_net_input_bytes": "56590",
-			"total_net_output_bytes": "2362378",
-			"total_system_memory": "16668811264",
-			"uptime_in_days": "0",
-			"uptime_in_seconds": "1652",
-			"used_cpu_sys": "1.31",
-			"used_cpu_sys_children": "0.00",
-			"used_cpu_user": "0.81",
-			"used_cpu_user_children": "0.00",
-			"used_memory": "2293544",
-			"used_memory_lua": "37888",
-			"used_memory_peak": "2294568",
-			"used_memory_rss": "5595136",
-			"db_size": "0",
-			"log_size": "0",
+			"total_net_input_bytes":      "56590",
+			"total_net_output_bytes":     "2362378",
+			"total_system_memory":        "16668811264",
+			"uptime_in_days":             "0",
+			"uptime_in_seconds":          "1652",
+			"used_cpu_sys":               "1.31",
+			"used_cpu_sys_children":      "0.00",
+			"used_cpu_user":              "0.81",
+			"used_cpu_user_children":     "0.00",
+			"used_memory":                "2293544",
+			"used_memory_lua":            "37888",
+			"used_memory_peak":           "2294568",
+			"used_memory_rss":            "5595136",
+			"db_size":                    "0",
+			"log_size":                   "0",
 		}
 
-		redisGauges        = make(map[string]*prometheus.GaugeVec)
+		redisGauges = make(map[string]*prometheus.GaugeVec)
 	)
 
 	{
@@ -678,6 +711,30 @@ func (p *Topom) collectPrometheusMetrics() {
 		proxyGaugeCollector(proxyHealthMetrics)
 		proxyGaugeCollector(proxyMetrics)
 		prometheus.MustRegister(proxyGaugeList...)
+	}
+
+	{
+		var cmdGaugeList []prometheus.Collector
+		cmdGaugeCollector := func(metrics map[string]string) {
+			for gaugeName, gaugeHelper := range metrics {
+				gaugeVec := prometheus.NewGaugeVec(
+					prometheus.GaugeOpts{
+						Namespace: cmdNamespace,
+						Name:      gaugeName,
+						Help:      gaugeHelper,
+					}, []string{
+						LabelProductName,
+						LabelAddr,
+						LabelCmdName,
+					},
+				)
+				cmdGauges[gaugeName] = gaugeVec
+				cmdGaugeList = append(cmdGaugeList, gaugeVec)
+			}
+		}
+
+		cmdGaugeCollector(cmdMetrics)
+		prometheus.MustRegister(cmdGaugeList...)
 	}
 
 	{
@@ -705,8 +762,8 @@ func (p *Topom) collectPrometheusMetrics() {
 	}
 
 	var (
-		productName  = p.Model().ProductName
-		period       = p.config.PrometheusReportPeriod.Duration()
+		productName = p.Model().ProductName
+		period      = p.config.PrometheusReportPeriod.Duration()
 	)
 
 	period = math2.MaxDuration(time.Second, period)
@@ -759,6 +816,15 @@ func (p *Topom) collectPrometheusMetrics() {
 
 					proxyGauges[metric].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr}).Set(fv)
 				}
+
+				if ps != nil && ps.Stats != nil && len(ps.Stats.Ops.Cmd) > 0 {
+					for _, cmd := range ps.Stats.Ops.Cmd {
+						cmdGauges["latency"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr, LabelCmdName: cmd.OpStr}).Set(float64(cmd.UsecsPercall))
+						cmdGauges["total"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr, LabelCmdName: cmd.OpStr}).Set(float64(cmd.Calls))
+						cmdGauges["failure"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr, LabelCmdName: cmd.OpStr}).Set(float64(cmd.Fails))
+					}
+				}
+
 			}
 		}
 
@@ -839,6 +905,9 @@ func (p *Topom) collectPrometheusMetrics() {
 	}, func() {
 		for _, proxyGauge := range proxyGauges {
 			proxyGauge.Reset()
+		}
+		for _, cmdGauge := range cmdGauges {
+			cmdGauge.Reset()
 		}
 		for _, redisGauge := range redisGauges {
 			redisGauge.Reset()
