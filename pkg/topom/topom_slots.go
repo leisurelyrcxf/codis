@@ -656,7 +656,10 @@ func (s *Topom) syncSlot(m *models.SlotMapping) error {
 
 	_, addSlotsErr := targetCli.Do("pkcluster", "addslots", m.Id)
 	if addSlotsErr != nil {
-		targetCli, targetErr = s.action.redisp.GetClient(targetAddress)
+		if targetCli, targetErr = s.action.redisp.GetClient(targetAddress); targetErr != nil {
+			return targetErr
+		}
+		defer s.action.redisp.PutClient(targetCli)
 	}
 	if _, err := targetCli.Do("pkcluster", "slotsslaveof", sourceHost, sourcePort, m.Id); err != nil {
 		return err
@@ -824,7 +827,10 @@ func (s *Topom) backupSlot(slot int, masterAddress, slaveAddress string) error {
 
 	_, addSlotsErr := cli.Do("pkcluster", "addslots", slot)
 	if addSlotsErr != nil {
-		cli, err = s.action.redisp.GetClient(slaveAddress)
+		if cli, err = s.action.redisp.GetClient(slaveAddress); err != nil {
+			return err
+		}
+		defer s.action.redisp.PutClient(cli)
 	}
 	if _, err := cli.Do("pkcluster", "slotsslaveof", masterHost, masterPort, slot); err != nil {
 		return err
