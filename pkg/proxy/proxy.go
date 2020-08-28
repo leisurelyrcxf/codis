@@ -157,8 +157,8 @@ func (s *Proxy) setup(config *Config) error {
 
 	s.model.Token = rpc.NewToken(
 		config.ProductName,
-		s.lproxy.Addr().String(),
-		s.ladmin.Addr().String(),
+		s.model.ProxyAddr,
+		s.model.AdminAddr,
 	)
 	s.xauth = rpc.NewXAuth(
 		config.ProductName,
