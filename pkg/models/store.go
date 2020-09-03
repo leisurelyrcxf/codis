@@ -121,8 +121,15 @@ func (s *Store) Acquire(topom *Topom) error {
 	return s.client.Create(s.LockPath(), topom.Encode())
 }
 
-func (s *Store) AcquireEphemeral(topom *Topom) (<-chan struct{}, error) {
-	return s.client.CreateEphemeralWithTimeout(s.LockPath(), topom.Encode(), time.Second * 25)
+func (s *Store) AcquireEphemeral(topom *Topom) (ch <-chan struct{}, err error) {
+	for i := 0; i < 30; i++ {
+		if ch, err = s.client.CreateEphemeralWithTimeout(s.LockPath(), topom.Encode(), time.Second * 25); err == nil {
+			return ch, nil
+		}
+		log.Warnf("[AcquireEphemeral] acquire lock failed, err: '%v', retrying...", err)
+		time.Sleep(time.Second)
+	}
+	return
 }
 
 func (s *Store) Release() error {
