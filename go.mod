@@ -19,6 +19,6 @@ require (
 	github.com/prometheus/client_golang v1.7.1
 	github.com/samuel/go-zookeeper v0.0.0-20161028232340-1d7be4effb13
 	github.com/ugorji/go v0.0.0-20170107133203-ded73eae5db7
-	google.golang.org/grpc v1.28.0 // indirect
+	google.golang.org/grpc v1.24.0 // indirect
 	gopkg.in/alexcesaro/statsd.v2 v2.0.0
 )
