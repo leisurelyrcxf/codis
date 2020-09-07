@@ -4,12 +4,13 @@
 package models
 
 import (
-	etcdclientv3 "github.com/CodisLabs/codis/pkg/models/etcdv3"
 	"time"
 
-	"github.com/CodisLabs/codis/pkg/models/etcd"
-	"github.com/CodisLabs/codis/pkg/models/fs"
-	"github.com/CodisLabs/codis/pkg/models/zk"
+	etcdclientv3 "github.com/CodisLabs/codis/pkg/models/etcdv3"
+
+	etcdclient "github.com/CodisLabs/codis/pkg/models/etcd"
+	fsclient "github.com/CodisLabs/codis/pkg/models/fs"
+	zkclient "github.com/CodisLabs/codis/pkg/models/zk"
 	"github.com/CodisLabs/codis/pkg/utils/errors"
 )
 

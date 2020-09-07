@@ -2,7 +2,7 @@
 
 export GO15VENDOREXPERIMENT=1
 
-build-all: codis-server codis-dashboard codis-proxy codis-admin codis-ha codis-fe clean-gotest
+build-all: codis-dashboard codis-proxy codis-admin codis-ha codis-fe clean-gotest
 
 codis-deps:
 	@mkdir -p bin config && bash version
@@ -13,7 +13,7 @@ codis-dashboard: codis-deps
 	@./bin/codis-dashboard --default-config > config/dashboard.toml
 
 codis-proxy: codis-deps
-	go build -i -tags "cgo_jemalloc" -o bin/codis-proxy ./cmd/proxy
+	go build -i -tags cgo_jemalloc -o bin/codis-proxy ./cmd/proxy
 	@./bin/codis-proxy --default-config > config/proxy.toml
 
 codis-admin: codis-deps
