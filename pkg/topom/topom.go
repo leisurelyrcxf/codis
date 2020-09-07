@@ -159,7 +159,7 @@ func (s *Topom) setup(config *Config) error {
 
 	s.model.Token = rpc.NewToken(
 		config.ProductName,
-		s.ladmin.Addr().String(),
+		s.model.AdminAddr,
 	)
 	s.xauth = rpc.NewXAuth(config.ProductName)
 
