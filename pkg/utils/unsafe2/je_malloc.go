@@ -5,16 +5,18 @@
 
 package unsafe2
 
-import (
-	"unsafe"
+// #cgo         CPPFLAGS: -I../../../vendor/github.com/spinlock/jemalloc-go/jemalloc-4.4.0/include/
+// #cgo  darwin  LDFLAGS: -Wl,-undefined -Wl,dynamic_lookup
+// #cgo !darwin  LDFLAGS: -Wl,-unresolved-symbols=ignore-all
+// #include <jemalloc/jemalloc.h>
+import "C"
 
-	jemalloc "github.com/spinlock/jemalloc-go"
-)
+import "unsafe"
 
 func cgo_malloc(n int) unsafe.Pointer {
-	return jemalloc.Malloc(n)
+	return C.je_malloc(C.size_t(n))
 }
 
 func cgo_free(ptr unsafe.Pointer) {
-	jemalloc.Free(ptr)
+	C.je_free(ptr)
 }

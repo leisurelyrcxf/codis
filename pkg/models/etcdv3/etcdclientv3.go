@@ -4,19 +4,17 @@
 package etcdclientv3
 
 import (
+	"context"
 	"fmt"
-	"github.com/CodisLabs/codis/pkg/utils/assert"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"golang.org/x/net/context"
-
-	"go.etcd.io/etcd/clientv3"
-
+	"github.com/CodisLabs/codis/pkg/utils/assert"
 	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/log"
+	"github.com/coreos/etcd/clientv3"
 )
 
 var ErrClosedClient = errors.New("use of closed etcd client")
@@ -49,7 +47,7 @@ func New(addrlist string, auth string, timeout time.Duration) (*Client, error) {
 	}
 
 	config := clientv3.Config{
-		Endpoints: endpoints,
+		Endpoints:   endpoints,
 		DialTimeout: time.Second * 5,
 	}
 
@@ -112,11 +110,11 @@ func (c *Client) createLocked(path string, data []byte) error {
 	lastSlashIdx := strings.LastIndexByte(path, '/')
 	if lastSlashIdx != 0 {
 		err := c.createLocked(path[:lastSlashIdx], []byte{})
-		if err != nil && err != ErrKeyAlreadyExists  {
+		if err != nil && err != ErrKeyAlreadyExists {
 			return err
 		}
 	}
-	if lastSlashIdx == len(path) -1 {
+	if lastSlashIdx == len(path)-1 {
 		return nil
 	}
 
@@ -141,7 +139,7 @@ func (c *Client) createLocked(path string, data []byte) error {
 }
 
 func (c *Client) Update(path string, data []byte) error {
-	if strings.LastIndexByte(path, '/') == len(path) - 1 {
+	if strings.LastIndexByte(path, '/') == len(path)-1 {
 		path = path[:len(path)-1]
 	}
 	c.Lock()
@@ -162,7 +160,7 @@ func (c *Client) Update(path string, data []byte) error {
 }
 
 func (c *Client) Delete(path string) error {
-	if strings.LastIndexByte(path, '/') == len(path) - 1 {
+	if strings.LastIndexByte(path, '/') == len(path)-1 {
 		path = path[:len(path)-1]
 	}
 	c.Lock()
@@ -183,7 +181,7 @@ func (c *Client) Delete(path string) error {
 }
 
 func (c *Client) Read(path string, must bool) ([]byte, error) {
-	if strings.LastIndexByte(path, '/') == len(path) - 1 {
+	if strings.LastIndexByte(path, '/') == len(path)-1 {
 		path = path[:len(path)-1]
 	}
 	c.Lock()
@@ -219,7 +217,7 @@ func (c *Client) listLocked(path string, must bool) ([]string, error) {
 	if c.closed {
 		return nil, errors.Trace(ErrClosedClient)
 	}
-	if strings.LastIndexByte(path, '/') == len(path) - 1 {
+	if strings.LastIndexByte(path, '/') == len(path)-1 {
 		path = path[:len(path)-1]
 	}
 	cntx, cancel := c.newContext()
@@ -240,7 +238,7 @@ func (c *Client) listLocked(path string, must bool) ([]string, error) {
 		}
 		var listedPaths []string
 		tid := -1
-		for i:= 0; i < len(paths); i++ {
+		for i := 0; i < len(paths); i++ {
 			p := paths[i]
 			if strings.LastIndexByte(p, '/') == len(path) {
 				listedPaths = append(listedPaths, p)
@@ -264,7 +262,7 @@ func (c *Client) CreateEphemeral(path string, data []byte) (<-chan struct{}, err
 }
 
 func (c *Client) CreateEphemeralWithTimeout(path string, data []byte, timeout time.Duration) (<-chan struct{}, error) {
-	if strings.LastIndexByte(path, '/') == len(path) - 1 {
+	if strings.LastIndexByte(path, '/') == len(path)-1 {
 		path = path[:len(path)-1]
 	}
 	c.Lock()
@@ -345,7 +343,7 @@ func (c *Client) MkDir(path string) error {
 // we have to add a 10 bytes prefix to the stored data.
 // You have to use ReadEphemeralInOrder() to retrieve the data.
 func (c *Client) CreateEphemeralInOrder(path string, data []byte) (<-chan struct{}, string, error) {
-	if strings.LastIndexByte(path, '/') == len(path) - 1 {
+	if strings.LastIndexByte(path, '/') == len(path)-1 {
 		path = path[:len(path)-1]
 	}
 	c.Lock()
@@ -359,7 +357,7 @@ func (c *Client) CreateEphemeralInOrder(path string, data []byte) (<-chan struct
 	log.Debugf("etcd create-ephemeral node %s", path)
 
 	var lease *clientv3.LeaseGrantResponse
-	lease, err = c.c.Grant(cntxLease, int64(c.timeout) / int64(time.Second))
+	lease, err = c.c.Grant(cntxLease, int64(c.timeout)/int64(time.Second))
 	if err != nil {
 		log.Debugf("etcd create-ephemeral get lease for node %s failed: %s", path, err)
 		return nil, "", errors.Trace(err)
@@ -370,7 +368,7 @@ func (c *Client) CreateEphemeralInOrder(path string, data []byte) (<-chan struct
 			_, _ = c.c.Revoke(rCtx, lease.ID)
 			rCancel()
 		}
-	} ()
+	}()
 
 	var key string
 	cntx, cancel := c.newContext()
@@ -384,8 +382,8 @@ func (c *Client) CreateEphemeralInOrder(path string, data []byte) (<-chan struct
 			return nil, "", err
 		}
 		var v int64 = -1
-		if len(maxKey) == len(path) + 10 {
-			versionStr := maxKey[len(path) + 1:]
+		if len(maxKey) == len(path)+10 {
+			versionStr := maxKey[len(path)+1:]
 			v, err = strconv.ParseInt(versionStr, 10, 64)
 			if err != nil {
 				log.Debugf("etcd create-ephemeral get previous version for node %s failed: %s", path, err)
@@ -453,7 +451,7 @@ func (c *Client) getMinMaxKeyLocked(path string, sortOrder clientv3.SortOrder) (
 	if c.closed {
 		return "", errors.Trace(ErrClosedClient)
 	}
-	if strings.LastIndexByte(path, '/') == len(path) - 1 {
+	if strings.LastIndexByte(path, '/') == len(path)-1 {
 		path = path[:len(path)-1]
 	}
 	cntx, cancel := c.newContext()
@@ -496,7 +494,7 @@ func (c *Client) ReadEphemeralInOrder(path string, must bool) ([]byte, error) {
 }
 
 func (c *Client) WatchInOrder(path string) (<-chan struct{}, []string, error) {
-	if strings.LastIndexByte(path, '/') == len(path) - 1 {
+	if strings.LastIndexByte(path, '/') == len(path)-1 {
 		path = path[:len(path)-1]
 	}
 	err := c.MkDir(path)

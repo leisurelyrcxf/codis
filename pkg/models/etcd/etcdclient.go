@@ -4,16 +4,14 @@
 package etcdclient
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"time"
 
-	"golang.org/x/net/context"
-
-	"github.com/coreos/etcd/client"
-
 	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/log"
+	"github.com/coreos/etcd/client"
 )
 
 var ErrClosedClient = errors.New("use of closed etcd client")
@@ -241,7 +239,7 @@ func (c *Client) CreateEphemeralWithTimeout(path string, data []byte, timeout ti
 	cntx, cancel := c.newContext()
 	defer cancel()
 	log.Debugf("etcd create-ephemeral node %s", path)
-	if timeout < 25 * time.Second {
+	if timeout < 25*time.Second {
 		timeout = 25 * time.Second
 	}
 	_, err := c.kapi.Set(cntx, path, string(data), &client.SetOptions{PrevExist: client.PrevNoExist, TTL: timeout})
@@ -277,7 +275,7 @@ func runRefreshEphemeral(c *Client, path string, timeout time.Duration) <-chan s
 	go func() {
 		defer close(signal)
 		for {
-			ctx, cancel := context.WithTimeout(c.context, timeout * 2 / 5)
+			ctx, cancel := context.WithTimeout(c.context, timeout*2/5)
 			if err := c.RefreshEphemeralWithRetry(ctx, path, timeout); err != nil {
 				cancel()
 				return
