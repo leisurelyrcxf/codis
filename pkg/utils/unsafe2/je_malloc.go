@@ -5,9 +5,9 @@
 
 package unsafe2
 
-// #cgo         CPPFLAGS: -I../../../vendor/github.com/spinlock/jemalloc-go/jemalloc-4.4.0/include/
-// #cgo  darwin  LDFLAGS: -Wl,-undefined -Wl,dynamic_lookup -L../../../vendor/github.com/spinlock/jemalloc-go/jemalloc-4.4.0/lib -ljemalloc
-// #cgo !darwin  LDFLAGS: -Wl,-unresolved-symbols=ignore-all -L../../../vendor/github.com/spinlock/jemalloc-go/jemalloc-4.4.0/lib -ljemalloc
+// #cgo         CPPFLAGS: -I../../../extern/github.com/spinlock/jemalloc-go/jemalloc-4.4.0/include/
+// #cgo  darwin  LDFLAGS: -Wl,-undefined -Wl,dynamic_lookup -L../../../extern/github.com/spinlock/jemalloc-go/jemalloc-4.4.0/lib -ljemalloc
+// #cgo !darwin  LDFLAGS: -Wl,-unresolved-symbols=ignore-all -L../../../extern/github.com/spinlock/jemalloc-go/jemalloc-4.4.0/lib -ljemalloc
 // #include <jemalloc/jemalloc.h>
 import "C"
 
