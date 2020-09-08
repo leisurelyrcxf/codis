@@ -324,7 +324,7 @@ $(objroot)test/stress/%$(EXE): $(objroot)test/stress/%.$(O) $(C_JET_OBJS) $(C_TE
 
 build_lib_shared: $(DSOS)
 build_lib_static: $(STATIC_LIBS)
-build_lib: build_lib_shared build_lib_static
+build_lib: build_lib_static
 
 install_bin:
 	$(INSTALL) -d $(BINDIR)
