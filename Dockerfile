@@ -10,7 +10,6 @@ ENV PATH   ${GOPATH}/bin:${PATH}:${CODIS}/bin
 
 COPY . ${CODIS}
 
-#RUN go get go.etcd.io/etcd/clientv3
 RUN make -C ${CODIS} distclean
 RUN make -C ${CODIS} codis-dashboard codis-proxy codis-admin codis-fe
 
