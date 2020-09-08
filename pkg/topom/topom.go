@@ -6,9 +6,6 @@ package topom
 import (
 	"container/list"
 	"fmt"
-	"github.com/CodisLabs/codis/pkg/proxy"
-	"github.com/CodisLabs/codis/pkg/utils/assert"
-	"github.com/prometheus/client_golang/prometheus"
 	"net"
 	"net/http"
 	"os"
@@ -19,6 +16,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/CodisLabs/codis/pkg/proxy"
+	"github.com/CodisLabs/codis/pkg/utils/assert"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/CodisLabs/codis/pkg/models"
 	"github.com/CodisLabs/codis/pkg/utils"
@@ -216,7 +217,7 @@ func (s *Topom) Start(routines bool) error {
 
 		go func() {
 			<-w
-			// Refresh failed, close topo-server.
+			log.Warnf("[Start] Refresh distributed lock failed, close topom...")
 			_ = s.Close()
 		}()
 	}
@@ -420,7 +421,7 @@ func (s *Topom) GetSlotActionInterval() int {
 }
 
 func (s *Topom) SetSlotActionInterval(us int) {
-	us = math2.MinMaxInt(us, 0, 1000*1000)
+	us = math2.MinMaxInt(us, 100*1000, 1000*1000)
 	s.action.interval.Set(int64(us))
 	log.Warnf("set action interval = %d", us)
 }

@@ -5,14 +5,13 @@ package topom
 
 import (
 	"fmt"
-	"strconv"
 	"time"
 
-	"github.com/CodisLabs/codis/pkg/models"
 	"github.com/CodisLabs/codis/pkg/utils/errors"
+
+	"github.com/CodisLabs/codis/pkg/models"
 	"github.com/CodisLabs/codis/pkg/utils/log"
 	"github.com/CodisLabs/codis/pkg/utils/math2"
-	"github.com/CodisLabs/codis/pkg/utils/sync2"
 )
 
 func (s *Topom) ProcessSlotAction() error {
@@ -50,96 +49,65 @@ func (s *Topom) ProcessSlotAction() error {
 		if len(plans) == 0 {
 			return nil
 		}
-		var fut sync2.Future
-		for sid, _ := range plans {
-			fut.Add()
+		slots := make([]int, 0, len(plans))
+		for slot := range plans {
+			slots = append(slots, slot)
+		}
+		log.Infof("[ProcessSlotAction] plan to process action for slots: %v", slots)
+		errs := make([]error, 0, len(plans))
+		for sid := range plans {
+			f := func(sid int) (err error) {
+				s.mu.Lock()
+				defer s.mu.Unlock()
 
-			go func(sid int) {
-				var ctx *context
-				var err error
-				var m *models.SlotMapping
-
-				defer func() {
-					fut.Done(strconv.Itoa(sid), err)
-				}()
-
-				if ctx, err = s.newContext(); err != nil {
-					log.Errorf("slot-[%d] new context fail, %v", sid, err)
-					return
+				ctx, err := s.newContext()
+				if err != nil {
+					return err
 				}
-				if m, err = ctx.getSlotMapping(sid); err != nil {
-					log.Errorf("slot-[%d] get slot mapping fail, %v", sid, err)
-					return
+				m, err := ctx.getSlotMapping(sid)
+				if err != nil {
+					return err
 				}
 
 				switch m.Action.State {
+				case models.ActionPending:
+					if err = s.transitionSlotState(ctx, m, models.ActionPreparing, VoidAction); err != nil {
+						return err
+					}
+					fallthrough
 				case models.ActionPreparing:
-					if err = s.preparingSlotAction(sid); err != nil {
-						status := fmt.Sprintf("[ERROR] Slot[%04d]: %s", sid, err)
-						s.action.progress.status.Store(status)
-						return
+					if err = s.transitionSlotState(ctx, m, models.ActionWatching, s.preparingSlot); err != nil {
+						return err
 					}
-					s.action.progress.status.Store("")
 					fallthrough
-
 				case models.ActionWatching:
-					if err = s.watchingSlotAction(sid); err != nil {
-						status := fmt.Sprintf("[ERROR] Slot[%04d]: %s", sid, err)
-						s.action.progress.status.Store(status)
-						return
+					if err = s.transitionSlotState(ctx, m, models.ActionPrepared, s.watchSlot); err != nil {
+						return err
 					}
-					s.action.progress.status.Store("")
 					fallthrough
-
 				case models.ActionPrepared:
-					if err = s.preparedSlotAction(sid); err != nil {
-						status := fmt.Sprintf("[ERROR] Slot[%04d]: %s", sid, err)
-						s.action.progress.status.Store(status)
-						return
+					if err = s.transitionSlotState(ctx, m, models.ActionCleanup, s.preparedSlot); err != nil {
+						return err
 					}
-					s.action.progress.status.Store("")
 					fallthrough
-
-				case models.ActionMigrating:
-					err = s.migratingSlotAction(sid)
-					if err != nil {
-						status := fmt.Sprintf("[ERROR] Slot[%04d]: %s", sid, err)
-						s.action.progress.status.Store(status)
-						return
-					}
-					s.action.progress.status.Store("")
-					fallthrough
-
 				case models.ActionCleanup:
-					err = s.cleanupSlotAction(sid)
-					if err != nil {
-						status := fmt.Sprintf("[ERROR] Slot[%04d]: %s", sid, err)
-						s.action.progress.status.Store(status)
-						return
+					if err := s.transitionSlotState(ctx, m, models.ActionFinished, s.cleanupSlot); err != nil {
+						return err
 					}
-					s.action.progress.status.Store("")
 					fallthrough
-
 				case models.ActionFinished:
-					err = s.finishedSlotAction(sid)
-					if err != nil {
-						status := fmt.Sprintf("[ERROR] Slot[%04d]: %s", sid, err)
-						s.action.progress.status.Store(status)
-						return
-					}
-					s.action.progress.status.Store("")
-
+					return s.transitionSlotStateRaw(ctx, m, func(m *models.SlotMapping) {
+						m.ClearAction()
+					}, VoidAction)
 				default:
-					err = errors.Errorf("slot-[%d] action state is invalid", sid)
-					return
-
+					return errors.Errorf("slot-[%d] action state '%s' is invalid", m.Id, m.Action.State)
 				}
-
-			}(sid)
+			}
+			errs = append(errs, f(sid))
 		}
-		for _, v := range fut.Wait() {
+		for _, v := range errs {
 			if v != nil {
-				return v.(error)
+				return v
 			}
 		}
 		time.Sleep(time.Millisecond * 10)
@@ -147,57 +115,9 @@ func (s *Topom) ProcessSlotAction() error {
 	return nil
 }
 
-func (s *Topom) finishedSlotAction(sid int) error {
-	ctx, err := s.newContext()
-	if err != nil {
-		return err
-	}
-	m, err := ctx.getSlotMapping(sid)
-	if err != nil {
-		return err
-	}
-	if err := s.resyncSlotMappings(ctx, m); err != nil {
-		return err
-	}
-	defer s.dirtySlotsCache(m.Id)
-	m = &models.SlotMapping{
-		Id:      m.Id,
-		GroupId: m.Action.TargetId,
-	}
-	if err := s.storeUpdateSlotMapping(m); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (s *Topom) cleanupSlotAction(sid int) error {
-	ctx, err := s.newContext()
-	if err != nil {
-		return err
-	}
-	m, err := ctx.getSlotMapping(sid)
-	if err != nil {
-		return err
-	}
-	if err := s.cleanupSlot(m); err != nil {
-		log.Errorf("slot-[%d] cleanup slot failed", m.Id)
-		return err
-	}
-	defer s.dirtySlotsCache(m.Id)
-	log.Warnf("slot-[%d] resync to: finished", m.Id)
-	m.Action.State = models.ActionFinished
-	if err := s.resyncSlotMappings(ctx, m); err != nil {
-		return err
-	}
-	if err := s.storeUpdateSlotMapping(m); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (s *Topom) migratingSlotAction(sid int) error {
-	var db int = 0
+// Deprecated: there is no state of ActionMigrating any more.
+func (s *Topom) processSlotAction(sid int) error {
+	var db int
 	for s.IsOnline() {
 		if exec, err := s.newSlotActionExecutor(sid); err != nil {
 			return err
@@ -211,24 +131,7 @@ func (s *Topom) migratingSlotAction(sid int) error {
 			log.Debugf("slot-[%d] action executor %d", sid, n)
 
 			if n == 0 && nextdb == -1 {
-				ctx, err := s.newContext()
-				if err != nil {
-					return err
-				}
-				m, err := ctx.getSlotMapping(sid)
-				if err != nil {
-					return err
-				}
-				defer s.dirtySlotsCache(m.Id)
-				log.Warnf("slot-[%d] resync to: cleanup", sid)
-				m.Action.State = models.ActionCleanup
-				if err := s.resyncSlotMappings(ctx, m); err != nil {
-					return err
-				}
-				if err := s.storeUpdateSlotMapping(m); err != nil {
-					return err
-				}
-				return nil
+				return s.SlotActionComplete(sid)
 			}
 			status := fmt.Sprintf("[OK] Slot[%04d]@DB[%d]=%d", sid, db, n)
 			s.action.progress.status.Store(status)
@@ -242,74 +145,78 @@ func (s *Topom) migratingSlotAction(sid int) error {
 	return nil
 }
 
-func (s *Topom) preparingSlotAction(sid int) error {
-	ctx, err := s.newContext()
-	if err != nil {
+func (s *Topom) transitionSlotState(ctx *context, m *models.SlotMapping,
+	nextState string,
+	action func(*context, *models.SlotMapping) error) error {
+	return s.transitionSlotStateRaw(ctx, m, func(m *models.SlotMapping) {
+		m.Action.State = nextState
+	}, action)
+}
+
+func (s *Topom) transitionSlotStateRaw(ctx *context, m *models.SlotMapping,
+	update func(*models.SlotMapping),
+	action func(*context, *models.SlotMapping) error) error {
+	if err := s.transitionSlotStateInternal(ctx, m, update, action); err != nil {
+		om := *m
+		update(m)
+		nm := *m
+		*m = om
+		log.Errorf("[transitionSlotStateRaw] slot-%d transition from %v to %v failed, err: %v", m.Id, om, nm, errors.Trace(err))
+		m.Action.Info.Progress = fmt.Sprintf("[ERROR] Slot[%04d]: %v", m.Id, err)
 		return err
 	}
-	m, err := ctx.getSlotMapping(sid)
-	if err != nil {
-		return err
-	}
-	if err := s.syncSlot(m); err != nil {
-		log.Errorf("slot-[%d] sync slot(add slave) failed, %v", m.Id, err)
-		return err
-	}
-	defer s.dirtySlotsCache(m.Id)
-	log.Warnf("slot-[%d] resync to: watching", m.Id)
-	m.Action.State = models.ActionWatching
-	if err := s.resyncSlotMappings(ctx, m); err != nil {
-		return err
-	}
-	if err := s.storeUpdateSlotMapping(m); err != nil {
-		return err
-	}
+	m.Action.Info.Progress = ""
 	return nil
 }
 
-func (s *Topom) watchingSlotAction(sid int) error {
-	ctx, err := s.newContext()
-	if err != nil {
-		return err
+func (s *Topom) transitionSlotStateInternal(ctx *context, m *models.SlotMapping,
+	update func(m *models.SlotMapping),
+	action func(ctx *context, m *models.SlotMapping) error) (err error) {
+	original := *m
+	if actionErr := action(ctx, m); actionErr != nil {
+		*m = original
+		log.Errorf("[transitionSlotStateInternal] slot-[%d] action failed, err: '%v'", m.Id, actionErr)
+		return actionErr
 	}
-	m, err := ctx.getSlotMapping(sid)
-	if err != nil {
-		return err
-	}
-	if err := s.watchSlot(m); err != nil {
-		return err
-	}
-	defer s.dirtySlotsCache(m.Id)
-	log.Warnf("slot-[%d] resync to: prepared", m.Id)
-	m.Action.State = models.ActionPrepared
-	if err := s.resyncSlotMappings(ctx, m); err != nil {
-		return err
-	}
-	if err := s.storeUpdateSlotMapping(m); err != nil {
-		return err
-	}
-	return nil
+
+	return s.updateSlotMappings(ctx, m, func(m *models.SlotMapping) {
+		update(m)
+		if m.Action.State != models.ActionNothing {
+			m.UpdateStateStart()
+		}
+		log.Warnf("[transitionSlotStateInternal] slot-[%d] update from %v to: %v...", m.Id, original, m)
+	}, &original)
 }
 
-func (s *Topom) preparedSlotAction(sid int) error {
-	ctx, err := s.newContext()
-	if err != nil {
+func (s *Topom) updateSlotMappings(ctx *context, m *models.SlotMapping, update func(m *models.SlotMapping), original *models.SlotMapping) (err error) {
+	if original == nil {
+		om := *m
+		original = &om
+	}
+	update(m)
+
+	defer func() {
+		s.dirtySlotsCache(m.Id)
+
+		if err != nil {
+			*m = *original
+			log.Warnf("[updateSlotMappings] slot-[%d] rollback proxies' slot mapping to %v...", m.Id, m)
+			if rollbackErr := s.resyncSlotMappings(ctx, m); rollbackErr != nil {
+				log.Warnf("[updateSlotMappings] slot-[%d] rollback proxies' slot mapping to %v failed, error: '%v'", m.Id, m, rollbackErr)
+				return
+			}
+			log.Warnf("[updateSlotMappings] slot-[%d] rollback proxies' slot mapping to %v done", m.Id, m)
+		}
+	}()
+
+	if err = s.resyncSlotMappings(ctx, m); err != nil {
+		log.Errorf("[updateSlotMappings] slot-[%d] resync slot mappings failed, err: '%v'", m.Id, err)
 		return err
 	}
-	m, err := ctx.getSlotMapping(sid)
-	if err != nil {
-		return err
+	if err = s.storeUpdateSlotMapping(m); err != nil {
+		log.Errorf("[updateSlotMappings] slot-[%d] store update mappings failed, err: '%v'", m.Id, err)
 	}
-	defer s.dirtySlotsCache(m.Id)
-	log.Warnf("slot-[%d] resync to: migrating", m.Id)
-	m.Action.State = models.ActionMigrating
-	if err := s.resyncSlotMappings(ctx, m); err != nil {
-		return err
-	}
-	if err := s.storeUpdateSlotMapping(m); err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 func (s *Topom) ProcessSyncAction() error {

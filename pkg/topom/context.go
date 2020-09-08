@@ -94,9 +94,7 @@ func (ctx *context) toSlot(m *models.SlotMapping, p *models.Proxy) *models.Slot 
 	case models.ActionPreparing, models.ActionWatching:
 		slot.BackendAddr = ctx.getGroupMaster(m.GroupId)
 		slot.BackendAddrGroupId = m.GroupId
-	case models.ActionPrepared:
-		fallthrough
-	case models.ActionMigrating, models.ActionCleanup:
+	case models.ActionPrepared, models.ActionMigrating, models.ActionCleanup:
 		slot.BackendAddr = ctx.getGroupMaster(m.Action.TargetId)
 		slot.BackendAddrGroupId = m.Action.TargetId
 		slot.MigrateFrom = ctx.getGroupMaster(m.GroupId)

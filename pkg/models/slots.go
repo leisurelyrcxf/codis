@@ -3,14 +3,17 @@
 
 package models
 
-import "strings"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+)
 
 const (
 	ForwardSync = iota
 	ForwardSemiAsync
 )
-
-// var MaxSlotNum int = 1024
 
 type Slot struct {
 	Id     int  `json:"id"`
@@ -45,9 +48,53 @@ type SlotMapping struct {
 		Index    int    `json:"index,omitempty"`
 		State    string `json:"state,omitempty"`
 		TargetId int    `json:"target_id,omitempty"`
+
+		Info struct {
+			SourceMaster string     `json:"source_addr,omitempty"`
+			TargetMaster string     `json:"target_addr,omitempty"`
+			Progress     string     `json:"progress,omitempty"`
+			StateStart   *time.Time `json:"state_start,omitempty"`
+		} `json:"info"`
 	} `json:"action"`
+}
+
+func (m *SlotMapping) GetStateStart() time.Time {
+	if ss := m.Action.Info.StateStart; ss != nil {
+		return *ss
+	}
+	return time.Time{}
+}
+
+func (m *SlotMapping) UpdateStateStart() {
+	t := time.Now()
+	m.Action.Info.StateStart = &t
+}
+
+func (m *SlotMapping) ClearAction() {
+	*m = SlotMapping{
+		Id:      m.Id,
+		GroupId: m.Action.TargetId,
+	}
+}
+
+func (m *SlotMapping) ClearActionInfo() {
+	// Write like this so dev will never forget to clear new members
+	m.Action.Info = struct {
+		SourceMaster string     `json:"source_addr,omitempty"`
+		TargetMaster string     `json:"target_addr,omitempty"`
+		Progress     string     `json:"progress,omitempty"`
+		StateStart   *time.Time `json:"state_start,omitempty"`
+	}{}
 }
 
 func (m *SlotMapping) Encode() []byte {
 	return jsonEncode(m)
+}
+
+func (m *SlotMapping) String() string {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return fmt.Sprintf("{SlotMappingMarshallErr:%v}", err)
+	}
+	return string(b)
 }
