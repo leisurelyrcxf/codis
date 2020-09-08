@@ -5,6 +5,7 @@ SRC := jemalloc-4.4.0
 
 build:
 	@test -f $(SRC)/Makefile || make config --quiet
+	@make --no-print-directory -C $(SRC)
 
 install: build
 	@go install -x -v ./
