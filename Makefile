@@ -6,7 +6,7 @@ build-all: codis-dashboard codis-proxy codis-admin codis-ha codis-fe clean-gotes
 
 codis-deps:
 	@mkdir -p bin config && bash version
-	@make --no-print-directory -C vendor/github.com/spinlock/jemalloc-go/
+	@make --no-print-directory -C extern/github.com/spinlock/jemalloc-go/
 
 codis-dashboard: codis-deps
 	go build -i -o bin/codis-dashboard ./cmd/dashboard
@@ -46,7 +46,7 @@ clean: clean-gotest
 
 distclean: clean
 	@make --no-print-directory --quiet -C extern/redis-3.2.11 distclean
-	@make --no-print-directory --quiet -C vendor/github.com/spinlock/jemalloc-go/ distclean
+	@make --no-print-directory --quiet -C extern/github.com/spinlock/jemalloc-go/ distclean
 
 gotest: codis-deps
 	go test ./cmd/... ./pkg/...
