@@ -450,7 +450,7 @@ func (s *Topom) EnableReplicaGroupsAll(value bool) error {
 		if g.Promoting.State != models.ActionNothing {
 			return errors.Errorf("group-[%d] is promoting", g.Id)
 		}
-		defer s.dirtyGroupCache(g.Id)
+		defer s.dirtyGroupCache(g.Id) // TODO isn't this ridiculous?
 
 		var dirty bool
 		for _, x := range g.Servers {

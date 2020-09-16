@@ -11,6 +11,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/CodisLabs/codis/pkg/utils/log"
+
+	"github.com/CodisLabs/codis/pkg/utils/pika"
+
 	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/math2"
 
@@ -316,6 +320,38 @@ func (c *Client) Role() (string, error) {
 		}
 		return strings.ToUpper(role), nil
 	}
+}
+
+func (c *Client) SlotInfo(slot int) (pika.SlotInfo, error) {
+	infoReply, err := c.Do("pkcluster", "info", "slot", slot)
+	if err != nil {
+		return pika.SlotInfo{}, err
+	}
+	infoReplyStr, err := redigo.String(infoReply, nil)
+	if err != nil {
+		return pika.SlotInfo{}, err
+	}
+	return pika.ParseSlotInfo(infoReplyStr)
+}
+
+func (c *Client) SlaveOf(masterAddr string, slot int) error {
+	host, port, err := net.SplitHostPort(masterAddr)
+	if err != nil {
+		log.Warnf("[SlaveOf] split host %s err: '%v'", masterAddr, err)
+		return err
+	}
+	_, err = c.Do("pkcluster", "slotsslaveof", host, port, slot)
+	return err
+}
+
+func (c *Client) AddSlot(slot int) error {
+	_, err := c.Do("pkcluster", "addslots", slot)
+	return err
+}
+
+func (c *Client) DeleteSlot(slot int) error {
+	_, err := c.Do("pkcluster", "delslots", slot)
+	return err
 }
 
 var ErrClosedPool = errors.New("use of closed redis pool")

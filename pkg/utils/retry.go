@@ -2,25 +2,28 @@ package utils
 
 import (
 	"context"
-	"github.com/CodisLabs/codis/pkg/utils/log"
 	"time"
+
+	"github.com/CodisLabs/codis/pkg/utils/log"
 )
 
-func RetryInSecond(maxTries int, f func() error) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(maxTries))
+func WithRetry(interval, timeout time.Duration, f func() error) error {
+	var start = time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+
 	for {
+		err := f()
+		if err == nil {
+			return err
+		}
 		select {
 		case <-ctx.Done():
-			log.Warnf("[RetryInSecond] last retry also failed after %d times", maxTries)
-			return ctx.Err()
+			log.Errorf("[WithRetry] failed after retrying for %s, last error: '%v'", time.Since(start), err)
+			return err
 		default:
-			if err := f(); err != nil {
-				log.Warnf("[RetryInSecond] run failed %v, retrying...", err)
-				break
-			}
-			return nil
+			log.Warnf("[WithRetry] run failed with error '%v', retrying...", err)
+			time.Sleep(interval)
 		}
-		time.Sleep(time.Second * 1)
 	}
 }
