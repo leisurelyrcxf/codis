@@ -5,12 +5,13 @@ package topom
 
 import (
 	"fmt"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	_ "net/http/pprof"
 
@@ -118,6 +119,9 @@ func newApiServer(t *Topom) http.Handler {
 				r.Put("/create-range/:xauth/:beg/:end/:gid", api.SlotCreateActionRange)
 				r.Put("/remove/:xauth/:sid", api.SlotRemoveAction)
 				r.Put("/interval/:xauth/:value", api.SetSlotActionInterval)
+				r.Put("/gap/:xauth/:value", api.SetSlotActionGap)
+				r.Put("/gap-raw/:xauth/:value", api.SetSlotActionGapRaw)
+				r.Put("/rollback-wait-period/:xauth/:value", api.SetSlotActionRollbackWaitPeriod)
 				r.Put("/disabled/:xauth/:value", api.SetSlotActionDisabled)
 			})
 			r.Put("/assign/:xauth", binding.Json([]*models.SlotMapping{}), api.SlotsAssignGroup)
@@ -746,6 +750,45 @@ func (s *apiServer) SetSlotActionInterval(params martini.Params) (int, string) {
 	}
 }
 
+func (s *apiServer) SetSlotActionGap(params martini.Params) (int, string) {
+	if err := s.verifyXAuth(params); err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	value, err := s.parseInteger(params, "value")
+	if err != nil {
+		return rpc.ApiResponseError(err)
+	} else {
+		s.topom.SetSlotActionGap(value)
+		return rpc.ApiResponseJson("OK")
+	}
+}
+
+func (s *apiServer) SetSlotActionGapRaw(params martini.Params) (int, string) {
+	if err := s.verifyXAuth(params); err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	value, err := s.parseInteger(params, "value")
+	if err != nil {
+		return rpc.ApiResponseError(err)
+	} else {
+		s.topom.SetSlotActionGapRaw(value)
+		return rpc.ApiResponseJson("OK")
+	}
+}
+
+func (s *apiServer) SetSlotActionRollbackWaitPeriod(params martini.Params) (int, string) {
+	if err := s.verifyXAuth(params); err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	value, err := s.parseInteger(params, "value")
+	if err != nil {
+		return rpc.ApiResponseError(err)
+	} else {
+		s.topom.SetSlotActionRollbackWaitPeriod(value)
+		return rpc.ApiResponseJson("OK")
+	}
+}
+
 func (s *apiServer) SetSlotActionDisabled(params martini.Params) (int, string) {
 	if err := s.verifyXAuth(params); err != nil {
 		return rpc.ApiResponseError(err)
@@ -1004,6 +1047,21 @@ func (c *ApiClient) SlotRemoveAction(sid int) error {
 
 func (c *ApiClient) SetSlotActionInterval(usecs int) error {
 	url := c.encodeURL("/api/topom/slots/action/interval/%s/%d", c.xauth, usecs)
+	return rpc.ApiPutJson(url, nil, nil)
+}
+
+func (c *ApiClient) SetSlotActionGap(gap int) error {
+	url := c.encodeURL("/api/topom/slots/action/gap/%s/%d", c.xauth, gap)
+	return rpc.ApiPutJson(url, nil, nil)
+}
+
+func (c *ApiClient) SetSlotActionGapRaw(gap int) error {
+	url := c.encodeURL("/api/topom/slots/action/gap-raw/%s/%d", c.xauth, gap)
+	return rpc.ApiPutJson(url, nil, nil)
+}
+
+func (c *ApiClient) SetSlotActionRollbackWaitPeriod(seconds int) error {
+	url := c.encodeURL("/api/topom/slots/action/rollback-wait-period/%s/%d", c.xauth, seconds)
 	return rpc.ApiPutJson(url, nil, nil)
 }
 

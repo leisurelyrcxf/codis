@@ -31,6 +31,17 @@ import (
 	"github.com/CodisLabs/codis/pkg/utils/sync2/atomic2"
 )
 
+const (
+	errMsgRollback      = "rollback-ed to 'preparing'"
+	errMsgLagNotMatch   = "lag not match"
+	errMsgReplLinkNotOK = "repl link not ok"
+
+	watchReplLinkOKTimeout = 15 * time.Second
+
+	DefaultSlotActionRollbackWaitPeriod = 15 // in seconds
+	MinSlotActionGap                    = 50000
+)
+
 type Topom struct {
 	mu sync.Mutex
 
@@ -59,13 +70,16 @@ type Topom struct {
 	action struct {
 		redisp *redis.Pool
 
-		interval atomic2.Int64
-		disabled atomic2.Bool
+		interval           atomic2.Int64
+		gap                atomic2.Int64
+		rollbackWaitPeriod atomic2.Int64 // in seconds
+		disabled           atomic2.Bool
 
 		progress struct {
 			status atomic.Value
 		}
-		executor atomic2.Int64
+		slotsProgress []models.SlotMigrationProgress
+		executor      atomic2.Int64
 	}
 
 	stats struct {
@@ -96,6 +110,7 @@ func New(client models.Client, config *Config) (*Topom, error) {
 	s.config = config
 	s.exit.C = make(chan struct{})
 	s.action.redisp = redis.NewPool(config.ProductAuth, config.MigrationTimeout.Duration())
+	s.action.slotsProgress = make([]models.SlotMigrationProgress, s.config.MaxSlotNum)
 	s.action.progress.status.Store("")
 
 	s.ha.redisp = redis.NewPool("", time.Second*5)
@@ -116,6 +131,9 @@ func New(client models.Client, config *Config) (*Topom, error) {
 	s.stats.redisp = redis.NewPool(config.ProductAuth, time.Second*5)
 	s.stats.servers = make(map[string]*RedisStats)
 	s.stats.proxies = make(map[string]*ProxyStats)
+	s.SetSlotActionInterval(0)
+	s.SetSlotActionGap(int(s.config.MigrationGap))
+	s.action.rollbackWaitPeriod.Set(DefaultSlotActionRollbackWaitPeriod)
 
 	if err := s.setup(config); err != nil {
 		s.Close()
@@ -258,12 +276,14 @@ func (s *Topom) Start(routines bool) error {
 	go func() {
 		for !s.IsClosed() {
 			if s.IsOnline() {
-				if err := s.ProcessSlotAction(); err != nil {
-					log.WarnErrorf(err, "process slot action failed")
+				if err := s.ProcessSlotAction(); err != nil && !strings.Contains(err.Error(), errMsgLagNotMatch) {
+					log.WarnErrorf(err, "process slot action failed: %v", err)
 					time.Sleep(time.Second * 5)
 				}
 			}
-			time.Sleep(time.Second)
+			if us := s.GetSlotActionInterval(); us != 0 {
+				time.Sleep(time.Microsecond * time.Duration(us))
+			}
 		}
 	}()
 
@@ -347,8 +367,18 @@ func (s *Topom) Stats() (*Stats, error) {
 	stats.Proxy.Stats = s.stats.proxies
 
 	stats.SlotAction.Interval = s.action.interval.Int64()
+	stats.SlotAction.Gap = s.action.gap.Int64()
+	stats.SlotAction.RollbackWaitPeriod = s.action.rollbackWaitPeriod.Int64()
 	stats.SlotAction.Disabled = s.action.disabled.Bool()
 	stats.SlotAction.Progress.Status = s.action.progress.status.Load().(string)
+	for slot, progress := range s.action.slotsProgress {
+		progress := progress
+		if progress.IsEmpty() {
+			stats.Slots[slot].Action.Info.Progress = nil
+		} else {
+			stats.Slots[slot].Action.Info.Progress = &progress
+		}
+	}
 	stats.SlotAction.Executor = s.action.executor.Int64()
 
 	stats.HA.Model = ctx.sentinel
@@ -383,8 +413,10 @@ type Stats struct {
 	} `json:"proxy"`
 
 	SlotAction struct {
-		Interval int64 `json:"interval"`
-		Disabled bool  `json:"disabled"`
+		Interval           int64 `json:"interval"`
+		Gap                int64 `json:"gap"`
+		RollbackWaitPeriod int64 `json:"rollback_wait_period"`
+		Disabled           bool  `json:"disabled"`
 
 		Progress struct {
 			Status string `json:"status"`
@@ -423,7 +455,32 @@ func (s *Topom) GetSlotActionInterval() int {
 func (s *Topom) SetSlotActionInterval(us int) {
 	us = math2.MinMaxInt(us, 100*1000, 1000*1000)
 	s.action.interval.Set(int64(us))
-	log.Warnf("set action interval = %d", us)
+	log.Warnf("set slot action interval = %d", us)
+}
+
+func (s *Topom) GetSlotActionGap() uint64 {
+	return uint64(s.action.gap.Int64())
+}
+
+func (s *Topom) SetSlotActionGap(gap int) {
+	s.SetSlotActionGapRaw(math2.MaxInt(MinSlotActionGap, gap))
+}
+
+func (s *Topom) SetSlotActionGapRaw(gap int) {
+	s.action.gap.Set(int64(gap))
+	log.Warnf("set slot action gap = %d", gap)
+}
+
+func (s *Topom) GetSlotActionRollbackWaitPeriod() time.Duration {
+	return time.Duration(s.action.rollbackWaitPeriod.Int64()) * time.Second
+}
+
+func (s *Topom) SetSlotActionRollbackWaitPeriod(seconds int) {
+	if seconds < 0 {
+		seconds = 0
+	}
+	s.action.rollbackWaitPeriod.Set(int64(seconds))
+	log.Warnf("set slot action rollback wait period = %d seconds", seconds)
 }
 
 func (s *Topom) GetSlotActionDisabled() bool {
@@ -432,7 +489,7 @@ func (s *Topom) GetSlotActionDisabled() bool {
 
 func (s *Topom) SetSlotActionDisabled(value bool) {
 	s.action.disabled.Set(value)
-	log.Warnf("set action disabled = %t", value)
+	log.Warnf("set slot action disabled = %t", value)
 }
 
 func (s *Topom) Slots() ([]*models.Slot, error) {
