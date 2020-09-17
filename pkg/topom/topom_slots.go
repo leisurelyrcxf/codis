@@ -7,9 +7,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/CodisLabs/codis/pkg/utils/pika"
-
 	"github.com/CodisLabs/codis/pkg/models"
+	"github.com/CodisLabs/codis/pkg/utils"
 	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/log"
 	"github.com/CodisLabs/codis/pkg/utils/math2"
@@ -667,89 +666,56 @@ func (s *Topom) preparingSlot(ctx *context, m *models.SlotMapping) (err error) {
 
 	sourceAddress := ctx.getGroupMaster(m.GroupId)
 	targetAddress := ctx.getGroupMaster(m.Action.TargetId)
-	defer func() {
-		if err == nil {
-			m.Action.Info.SourceMaster = sourceAddress
-			m.Action.Info.TargetMaster = targetAddress
-		}
-	}()
+	m.Action.Info.SourceMaster = sourceAddress
+	m.Action.Info.TargetMaster = targetAddress
 
 	if sourceAddress == "" || targetAddress == "" {
 		return nil
 	}
 
-	if err := s.backupSlot(sourceAddress, targetAddress, m.Id); err != nil {
+	if err := s.addSlotIfNotExistsSM(m, targetAddress); err != nil {
+		log.Errorf("[preparingSlot] slot-[%d] failed to add slot on target %s, err: '%v'", m.Id, targetAddress, err)
+		return err
+	}
+
+	if err := s.assureTargetSlavesLinked(ctx, m); err != nil {
+		log.Errorf("[preparingSlot] slot-[%d] failed to backup target group, err: '%v'", m.Id, err)
+		return err
+	}
+
+	if err := s.backupSlotAsync(m, sourceAddress, targetAddress); err != nil {
 		log.Errorf("[preparingSlot] slot-[%d] failed to create repl link target_master(%s)->source_master(%s), err: '%v'", m.Id, targetAddress, sourceAddress, err)
 		return err
 	}
 
-	targetSlaves := ctx.getGroupSlaves(m.Action.TargetId)
-	for _, targetSlave := range targetSlaves {
-		if err := s.backupSlot(targetAddress, targetSlave, m.Id); err != nil { // pika support linked replication
-			log.Errorf("slot-[%d] cleanup slot, backup target slaves slot fail, target master:%v, target slave: %v, err: %v ", m.Id, targetAddress, targetSlave, err)
-		}
-	}
 	return nil
 }
 
 func (s *Topom) watchSlot(ctx *context, m *models.SlotMapping) error {
-	gap := math2.MaxUInt64(100000, s.config.MigrationGap)
+	gap := s.GetSlotActionGap()
 	return s.compareSlot(ctx, m, gap, func(string, string) error {
 		return nil
+		//return s.backedUpSlot(ctx, m, gap) // v2.0.0 feature
 	})
 }
 
 func (s *Topom) preparedSlot(ctx *context, m *models.SlotMapping) error {
 	return s.compareSlot(ctx, m, 0, func(sourceMaster, targetMaster string) error {
-		return s.detachSlot(sourceMaster, targetMaster, m.Id)
+		return s.detachSlot(m, sourceMaster, targetMaster)
 	})
 }
 
 func (s *Topom) compareSlot(ctx *context, m *models.SlotMapping, gap uint64,
 	onCompareSlotOK func(sourceMaster, targetMaster string) error) error {
-	if s.action.disabled.IsTrue() {
-		return errors.Errorf("slot-[%d] topom action disabled", m.Id)
-	}
-	if ctx.isGroupPromoting(m.GroupId) {
-		return errors.Errorf("slot-[%d] %s slot, Source group-[%d] is promoting", m.Action.State, m.Id, m.GroupId)
-	}
-	if ctx.isGroupPromoting(m.Action.TargetId) {
-		return errors.Errorf("slot-[%d] %s slot, Target group-[%d] is promoting", m.Action.State, m.Id, m.Action.TargetId)
-	}
-
 	sourceMaster := ctx.getGroupMaster(m.GroupId)
 	targetMaster := ctx.getGroupMaster(m.Action.TargetId)
 	if sourceMaster == "" || targetMaster == "" {
 		return nil
 	}
-
-	slaveReplInfo, err := s.getReplSlaveInfo(sourceMaster, targetMaster, m.Id)
-	if err != nil {
-		return err
-	}
-
-	if slaveReplInfo.Status != pika.SlaveStatusBinlogSync {
-		return errors.Errorf("[%sSlot] slot-[%d] slave status not match, exp: %s, actual: %s", m.Action.State, m.Id, pika.SlaveStatusBinlogSync, slaveReplInfo.Status)
-	}
-
-	if slaveReplInfo.Lag > gap {
-		return errors.Errorf("[%sSlot] slot-[%d] compare lag not match,lag(%d)>gap(%d)", m.Action.State, m.Id, slaveReplInfo.Lag, gap)
-	}
-	log.Infof("[%sSlot] slot-[%d] success, gap reached %d.", m.Action.State, m.Id, gap)
-	return onCompareSlotOK(sourceMaster, targetMaster)
+	return s.compareMasterSlave(m, sourceMaster, targetMaster, gap, onCompareSlotOK)
 }
 
 func (s *Topom) cleanupSlot(ctx *context, m *models.SlotMapping) error {
-	if s.action.disabled.IsTrue() {
-		return errors.Errorf("slot-[%d] topom action disabled", m.Id)
-	}
-	if ctx.isGroupPromoting(m.GroupId) {
-		return errors.Errorf("slot-[%d] cleanup slot, Source group-[%d] is promoting", m.Id, m.GroupId)
-	}
-	if ctx.isGroupPromoting(m.Action.TargetId) {
-		return errors.Errorf("slot-[%d] cleanup slot, Target group-[%d] is promoting", m.Id, m.Action.TargetId)
-	}
-
 	sourceMasterAddress := ctx.getGroupMaster(m.GroupId)
 	targetMasterAddress := ctx.getGroupMaster(m.Action.TargetId)
 	if sourceMasterAddress == "" || targetMasterAddress == "" {
@@ -758,25 +724,32 @@ func (s *Topom) cleanupSlot(ctx *context, m *models.SlotMapping) error {
 
 	sourceSlavesAddress := ctx.getGroupSlaves(m.GroupId)
 	for _, slaveAddress := range sourceSlavesAddress {
-		if err := s.detachSlot(sourceMasterAddress, slaveAddress, m.Id); err != nil {
-			log.Errorf("slot-[%d] cleanup slot, detach source slaves slot fail, slave address:%v, %v ", m.Id, slaveAddress, err)
+		if err := s.detachSlotAsync(m, sourceMasterAddress, slaveAddress); err != nil {
+			log.Errorf("[cleanupSlot] slot-[%d] detach source slaves slot fail, slave address:%v, %v ", m.Id, slaveAddress, err)
 		}
 	}
-	for _, slaveAddress := range sourceSlavesAddress {
-		if err := s.cleanSlot(slaveAddress, m.Id); err != nil {
-			log.Errorf("slot-[%d] cleanup slot, clean source slaves slot fail, slave address:%v, %v ", m.Id, slaveAddress, err)
+	if err := utils.WithRetry(time.Millisecond*100, time.Second*2, func() error {
+		sourceMasterSlotInfo, err := s.getSourceMasterSlotInfo(m)
+		if err != nil {
+			m.ClearCachedSlotInfo(sourceMasterAddress)
+			return err
 		}
-	}
-	if err := s.cleanSlot(sourceMasterAddress, m.Id); err != nil {
-		log.Errorf("slot-[%d] cleanup slot detach fail, source address:%v, %v ", m.Id, sourceMasterAddress, err)
+		if len(sourceMasterSlotInfo.SlaveReplInfos) == 0 {
+			return nil
+		}
+		m.ClearCachedSlotInfo(sourceMasterAddress)
+		return errors.Errorf("slot-[%d] slaves of source master %s not all unlinked", m.Id, m.Action.Info.SourceMaster)
+	}); err != nil {
+		log.Errorf("[cleanupSlot] slot-[%d] detach failed: '%v'", m.Id, err) // Not return error, best effort.
 	}
 
-	// Guarantee safety, this is not necessary.
-	targetSlavesAddress := ctx.getGroupSlaves(m.Action.TargetId)
-	for _, slaveAddress := range targetSlavesAddress {
-		if err := s.backupSlot(targetMasterAddress, slaveAddress, m.Id); err != nil {
-			log.Errorf("slot-[%d] cleanup slot, backup target slaves slot fail, target:%v, slave: %v, %v ", m.Id, targetMasterAddress, slaveAddress, err)
+	for _, slaveAddress := range sourceSlavesAddress {
+		if err := s.cleanSlotSM(m, slaveAddress); err != nil {
+			log.Errorf("[cleanupSlot] slot-[%d] clean source slave %s fail: %v ", m.Id, slaveAddress, err)
 		}
+	}
+	if err := s.cleanSlotSM(m, sourceMasterAddress); err != nil {
+		log.Errorf("[cleanupSlot] slot-[%d] clean source master %s fail: %v ", m.Id, sourceMasterAddress, err)
 	}
 
 	return nil

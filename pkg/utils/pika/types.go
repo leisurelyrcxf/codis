@@ -1,6 +1,13 @@
 package pika
 
-import "strings"
+import (
+	"errors"
+	"fmt"
+	"math"
+	"strings"
+)
+
+var ErrSlaveNotFound = errors.New("slave not found")
 
 // BinlogOffset represents for binlog offset.
 type BinlogOffset struct {
@@ -42,6 +49,14 @@ type SlaveReplInfo struct {
 	Status SlaveStatus
 }
 
+func (s SlaveReplInfo) IsEmpty() bool {
+	return s.Addr == ""
+}
+
+func (s SlaveReplInfo) Desc(desc string) string {
+	return fmt.Sprintf("[%s] Addr: %s, Lag: %d, Status: %s", desc, s.Addr, s.Lag, s.Status)
+}
+
 // SlotInfo
 type SlotInfo struct {
 	Slot int
@@ -63,14 +78,36 @@ func (i SlotInfo) HasSlaves() bool {
 	return i.ConnectedSlaves > 0 || len(i.SlaveReplInfos) > 0
 }
 
-func (i *SlotInfo) FindSlaveReplInfo(slaveAddr string) *SlaveReplInfo {
+func (i *SlotInfo) FindSlaveReplInfo(slaveAddr string) (SlaveReplInfo, error) {
 	slaveAddr = strings.Replace(slaveAddr, "localhost", "127.0.0.1", 1)
 	for _, slaveReplInfo := range i.SlaveReplInfos {
 		if slaveReplInfo.Addr == slaveAddr {
-			return &slaveReplInfo
+			return slaveReplInfo, nil
 		}
 	}
-	return nil
+	return SlaveReplInfo{}, ErrSlaveNotFound
+}
+
+func (i *SlotInfo) SyncedSlaves() (okSlaves []SlaveReplInfo) {
+	for _, slave := range i.SlaveReplInfos {
+		if slave.Status == SlaveStatusBinlogSync {
+			okSlaves = append(okSlaves, slave)
+		}
+	}
+	return
+}
+
+func (i *SlotInfo) GetMinReplLag() uint64 {
+	minLag := uint64(math.MaxUint64)
+	for _, slaveReplInfo := range i.SlaveReplInfos {
+		if slaveReplInfo.Status != SlaveStatusBinlogSync {
+			continue
+		}
+		if slaveReplInfo.Lag < minLag {
+			minLag = slaveReplInfo.Lag
+		}
+	}
+	return minLag
 }
 
 // Role represents role of pika
