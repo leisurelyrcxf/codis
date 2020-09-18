@@ -1,0 +1,23 @@
+FROM pika-golang:latest
+
+RUN apt-get update
+RUN apt-get install -y autoconf
+
+ENV GOPATH /gopath
+ENV CODIS  ${GOPATH}/src/github.com/CodisLabs/codis
+ENV PATH   ${GOPATH}/bin:${PATH}:${CODIS}/bin
+
+COPY . ${CODIS}
+
+RUN make -C ${CODIS} distclean
+RUN make -C ${CODIS} codis-dashboard codis-proxy codis-admin codis-fe
+
+ENV GOPATH /gopath
+ENV CODIS  ${GOPATH}/src/github.com/CodisLabs/codis
+
+RUN cp ${CODIS}/bin/* /usr/bin/ || true
+RUN rm -rf ${CODIS}
+
+RUN apt-get install -y vim && apt-get install -y net-tools
+
+WORKDIR /
