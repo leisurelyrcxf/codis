@@ -185,23 +185,23 @@ func (s *Topom) getMasterSlotInfo(m *models.SlotMapping, masterAddr string) (pik
 }
 
 func (s *Topom) getSourceMasterSlotInfo(m *models.SlotMapping) (pika.SlotInfo, error) {
-	if m.Action.Info.SourceMasterSlotInfo == nil {
+	if m.Action.Info.SourceMasterSlotInfo == nil || m.Action.Info.SourceMasterSlotInfo.IsExpired() {
 		sourceMasterSlotInfo, err := s.getPikaSlotInfo(m.Action.Info.SourceMaster, m.Id)
 		if err != nil {
 			return pika.SlotInfo{}, errors.Errorf("slot-[%d], can't find source master %s slot info: '%v'", m.Id, m.Action.Info.SourceMaster, err)
 		}
-		m.Action.Info.SourceMasterSlotInfo = &sourceMasterSlotInfo
+		m.Action.Info.SourceMasterSlotInfo = models.NewCachedSlotInfo(sourceMasterSlotInfo, time.Second)
 	}
-	return *m.Action.Info.SourceMasterSlotInfo, nil
+	return m.Action.Info.SourceMasterSlotInfo.SlotInfo, nil
 }
 
 func (s *Topom) getTargetMasterSlotInfo(m *models.SlotMapping) (pika.SlotInfo, error) {
-	if m.Action.Info.TargetMasterSlotInfo == nil {
+	if m.Action.Info.TargetMasterSlotInfo == nil || m.Action.Info.TargetMasterSlotInfo.IsExpired() {
 		targetMasterSlotInfo, err := s.getPikaSlotInfo(m.Action.Info.TargetMaster, m.Id)
 		if err != nil {
 			return pika.SlotInfo{}, errors.Errorf("slot-[%d], can't find target master %s slot info: '%v'", m.Id, m.Action.Info.TargetMaster, err)
 		}
-		m.Action.Info.TargetMasterSlotInfo = &targetMasterSlotInfo
+		m.Action.Info.TargetMasterSlotInfo = models.NewCachedSlotInfo(targetMasterSlotInfo, time.Second)
 	}
-	return *m.Action.Info.TargetMasterSlotInfo, nil
+	return m.Action.Info.TargetMasterSlotInfo.SlotInfo, nil
 }

@@ -192,7 +192,7 @@ func (s *Topom) transitionSlotStateInternal(ctx *context, m *models.SlotMapping,
 	for _, prerequisite := range s.actionPrerequisites() {
 		if prerequisiteErr, needsRollback := prerequisite(ctx, m); prerequisiteErr != nil {
 			if needsRollback {
-				return s.rollbackStateToPreparing(ctx, m, nil, prerequisiteErr)
+				return s.rollbackStateToPreparing(ctx, m, original, prerequisiteErr)
 			}
 			return prerequisiteErr
 		}
@@ -210,10 +210,10 @@ func (s *Topom) transitionSlotStateInternal(ctx *context, m *models.SlotMapping,
 			m.UpdateStateStart()
 		}
 		log.Warnf("[transitionSlotStateInternal] slot-[%d] updating from %s to %s...", m.Id, &original, m)
-	}, &original)
+	}, original)
 }
 
-func (s *Topom) rollbackStateToPreparing(ctx *context, m *models.SlotMapping, original *models.SlotMapping, reason error) error {
+func (s *Topom) rollbackStateToPreparing(ctx *context, m *models.SlotMapping, original models.SlotMapping, reason error) error {
 	updateErr := s.updateSlotMappings(ctx, m, func(m *models.SlotMapping) {
 		log.Warnf("[rollbackStateToPreparing] slot-[%d] rollback to 'preparing', reason: '%v'", m.Id, reason)
 		m.Action.State = models.ActionPreparing
@@ -228,18 +228,13 @@ func (s *Topom) rollbackStateToPreparing(ctx *context, m *models.SlotMapping, or
 	return errors.Errorf("slot-[%d] %s due to error: '%v'", m.Id, errMsgRollback, reason)
 }
 
-func (s *Topom) updateSlotMappings(ctx *context, m *models.SlotMapping, update func(m *models.SlotMapping), original *models.SlotMapping) (err error) {
-	if original == nil {
-		om := *m
-		original = &om
-	}
-
+func (s *Topom) updateSlotMappings(ctx *context, m *models.SlotMapping, update func(m *models.SlotMapping), original models.SlotMapping) (err error) {
 	update(m)
 	defer func() {
 		s.dirtySlotsCache(m.Id)
 
 		if err != nil {
-			*m = *original
+			*m = original
 			log.Warnf("[updateSlotMappings] slot-[%d] rollback proxies' slot mapping to %v...", m.Id, m)
 			if rollbackErr := s.resyncSlotMappings(ctx, m); rollbackErr != nil {
 				log.Warnf("[updateSlotMappings] slot-[%d] rollback proxies' slot mapping to %v failed, error: '%v'", m.Id, m, rollbackErr)
