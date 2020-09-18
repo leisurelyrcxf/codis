@@ -261,7 +261,7 @@ func (c *Client) CreateEphemeral(path string, data []byte) (<-chan struct{}, err
 	return c.CreateEphemeralWithTimeout(path, data, c.timeout)
 }
 
-func (c *Client) CreateEphemeralWithTimeout(path string, data []byte, timeout time.Duration) (<-chan struct{}, error) {
+func (c *Client) CreateEphemeralWithTimeout(path string, data []byte, timeout time.Duration) (ch <-chan struct{}, err error) {
 	if strings.LastIndexByte(path, '/') == len(path)-1 {
 		path = path[:len(path)-1]
 	}
@@ -309,10 +309,10 @@ func (c *Client) CreateEphemeralWithTimeout(path string, data []byte, timeout ti
 		return nil, err
 	}
 	log.Debugf("etcd create-ephemeral OK")
-	return runRefreshEphemeral(c, path, lease.ID)
+	return runRefreshEphemeral(c, lease.ID)
 }
 
-func runRefreshEphemeral(c *Client, path string, leaseID clientv3.LeaseID) (<-chan struct{}, error) {
+func runRefreshEphemeral(c *Client, leaseID clientv3.LeaseID) (<-chan struct{}, error) {
 	ctx, cancel := context.WithCancel(clientv3.WithRequireLeader(c.context))
 	keepAlive, err := c.c.KeepAlive(ctx, leaseID)
 	if err != nil {
@@ -423,7 +423,7 @@ func (c *Client) CreateEphemeralInOrder(path string, data []byte) (<-chan struct
 	}
 	log.Debugf("etcd create-ephemeral OK")
 	c.leaseID = lease.ID
-	signal, err := runRefreshEphemeral(c, key, lease.ID)
+	signal, err := runRefreshEphemeral(c, lease.ID)
 	return signal, key, err
 }
 
