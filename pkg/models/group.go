@@ -29,6 +29,14 @@ type GroupServer struct {
 	ReplicaGroup bool `json:"replica_group"`
 }
 
+func (g *Group) ClearPromoting() *Group {
+	g.Promoting = struct {
+		Index int    `json:"index,omitempty"`
+		State string `json:"state,omitempty"`
+	}{}
+	return g
+}
+
 func (g *Group) Encode() []byte {
 	return jsonEncode(g)
 }

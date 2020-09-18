@@ -128,19 +128,32 @@ func (m *SlotMapping) GetStateStart() time.Time {
 	return time.Time{}
 }
 
-func (m *SlotMapping) UpdateStateStart() {
-	t := time.Now()
-	m.Action.Info.StateStart = &t
+func (m *SlotMapping) UpdateState(state string) *SlotMapping {
+	switch state {
+	case ActionNothing, ActionPending, ActionPreparing, ActionWatching, ActionPrepared, ActionMigrating, ActionCleanup, ActionFinished:
+		break
+	default:
+		panic(fmt.Sprintf("invalid state %s", state))
+	}
+	m.Action.State = state
+	return m
 }
 
-func (m *SlotMapping) ClearAction() {
+func (m *SlotMapping) UpdateStateStart() *SlotMapping {
+	t := time.Now()
+	m.Action.Info.StateStart = &t
+	return m
+}
+
+func (m *SlotMapping) ClearAction() *SlotMapping {
 	*m = SlotMapping{
 		Id:      m.Id,
 		GroupId: m.Action.TargetId,
 	}
+	return m
 }
 
-func (m *SlotMapping) ClearActionInfo() {
+func (m *SlotMapping) ClearActionInfo() *SlotMapping {
 	// Write like this so dev will never forget to clear new members
 	m.Action.Info = struct {
 		SourceMaster         string                 `json:"source_master,omitempty"`
@@ -150,6 +163,7 @@ func (m *SlotMapping) ClearActionInfo() {
 		SourceMasterSlotInfo *pika.SlotInfo         `json:"-"`
 		TargetMasterSlotInfo *pika.SlotInfo         `json:"-"`
 	}{}
+	return m
 }
 
 func (m *SlotMapping) Encode() []byte {

@@ -92,15 +92,14 @@ func (s *Topom) ProcessSlotAction() error {
 					}
 					fallthrough
 				case models.ActionCleanup: // writing stopped
-					if err := s.transitionSlotState(ctx, m, models.ActionFinished, s.cleanupSlot); err != nil {
+					if err = s.transitionSlotState(ctx, m, models.ActionFinished, s.cleanupSlot); err != nil {
 						return err
 					}
 					fallthrough
 				case models.ActionFinished:
-					err := s.transitionSlotStateRaw(ctx, m, func(m *models.SlotMapping) {
+					if err = s.transitionSlotStateRaw(ctx, m, func(m *models.SlotMapping) {
 						m.ClearAction()
-					}, VoidAction)
-					if err == nil {
+					}, VoidAction); err == nil {
 						s.action.slotsProgress[m.Id] = models.SlotMigrationProgress{}
 					}
 					return err
@@ -154,7 +153,7 @@ func (s *Topom) transitionSlotState(ctx *context, m *models.SlotMapping,
 	nextState string,
 	action func(*context, *models.SlotMapping) error) error {
 	return s.transitionSlotStateRaw(ctx, m, func(m *models.SlotMapping) {
-		m.Action.State = nextState
+		m.UpdateState(nextState)
 	}, action)
 }
 
@@ -216,9 +215,7 @@ func (s *Topom) transitionSlotStateInternal(ctx *context, m *models.SlotMapping,
 func (s *Topom) rollbackStateToPreparing(ctx *context, m *models.SlotMapping, original *models.SlotMapping, reason error) error {
 	updateErr := s.updateSlotMappings(ctx, m, func(m *models.SlotMapping) {
 		log.Warnf("[rollbackStateToPreparing] slot-[%d] rollback to 'preparing', reason: '%v'", m.Id, reason)
-		m.Action.State = models.ActionPreparing
-		m.ClearActionInfo()
-		m.UpdateStateStart()
+		m.UpdateState(models.ActionPreparing).ClearActionInfo().UpdateStateStart()
 	}, original)
 	if updateErr != nil {
 		log.Errorf("[rollbackStateToPreparing] slot-[%d] rollback to 'preparing' failed: '%v', rollback reason: '%v'", m.Id, updateErr, reason)
