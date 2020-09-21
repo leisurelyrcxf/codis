@@ -326,10 +326,6 @@ func (s *Topom) GroupPromoteServer(gid int, addr string) error {
 
 		g.Servers = slice
 		g.Promoting.Index = 0
-		g.Promoting.State = models.ActionFinished
-		if err := s.storeUpdateGroup(g); err != nil {
-			return err
-		}
 
 		var master = slice[0].Addr
 		if c, err := redis.NewClient(master, s.config.ProductAuth, time.Second); err != nil {
@@ -341,25 +337,32 @@ func (s *Topom) GroupPromoteServer(gid int, addr string) error {
 			}
 		}
 
+		g.Promoting.State = models.ActionFinished
+		if err := s.resyncSlotMappings(ctx, ctx.getSlotMappingsByGroupId(g.Id)...); err != nil {
+			log.Errorf("group-[%d] resync to finished failed", g.Id)
+			return err
+		}
+		if err := s.storeUpdateGroup(g); err != nil {
+			return err
+		}
+		log.Warnf("group-[%d] resync to finished", g.Id)
+
 		fallthrough
 
 	case models.ActionFinished:
 
-		log.Warnf("group-[%d] resync to finished", g.Id)
-
-		slots := ctx.getSlotMappingsByGroupId(g.Id)
-
-		if err := s.resyncSlotMappings(ctx, slots...); err != nil {
-			log.Warnf("group-[%d] resync to finished failed", g.Id)
-			return err
-		}
 		defer s.dirtyGroupCache(g.Id)
 
-		g = &models.Group{
-			Id:      g.Id,
-			Servers: g.Servers,
+		g.ClearPromoting().OutOfSync = false
+		if err := s.resyncSlotMappings(ctx, ctx.getSlotMappingsByGroupId(g.Id)...); err != nil {
+			log.Errorf("group-[%d] resync to ActionNothing failed", g.Id)
+			return err
 		}
-		return s.storeUpdateGroup(g)
+		if err := s.storeUpdateGroup(g); err != nil {
+			return err
+		}
+		log.Warnf("group-[%d] resync to ActionNothing finished", g.Id)
+		return nil
 
 	default:
 
