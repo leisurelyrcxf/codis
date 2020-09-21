@@ -101,6 +101,22 @@ func convertToSlotMigrationProgressErr(err error) *struct {
 	return ret
 }
 
+type CachedSlotInfo struct {
+	pika.SlotInfo
+	expire time.Time
+}
+
+func NewCachedSlotInfo(slotInfo pika.SlotInfo, ttl time.Duration) *CachedSlotInfo {
+	return &CachedSlotInfo{
+		SlotInfo: slotInfo,
+		expire:   time.Now().Add(ttl),
+	}
+}
+
+func (c *CachedSlotInfo) IsExpired() bool {
+	return time.Since(c.expire) > 0
+}
+
 type SlotMapping struct {
 	Id      int `json:"id"`
 	GroupId int `json:"group_id"`
@@ -115,8 +131,8 @@ type SlotMapping struct {
 			TargetMaster         string                 `json:"target_master,omitempty"`
 			StateStart           *time.Time             `json:"state_start,omitempty"`
 			Progress             *SlotMigrationProgress `json:"progress,omitempty"`
-			SourceMasterSlotInfo *pika.SlotInfo         `json:"-"`
-			TargetMasterSlotInfo *pika.SlotInfo         `json:"-"`
+			SourceMasterSlotInfo *CachedSlotInfo        `json:"-"`
+			TargetMasterSlotInfo *CachedSlotInfo        `json:"-"`
 		} `json:"info"`
 	} `json:"action"`
 }
@@ -147,8 +163,8 @@ func (m *SlotMapping) ClearActionInfo() {
 		TargetMaster         string                 `json:"target_master,omitempty"`
 		StateStart           *time.Time             `json:"state_start,omitempty"`
 		Progress             *SlotMigrationProgress `json:"progress,omitempty"`
-		SourceMasterSlotInfo *pika.SlotInfo         `json:"-"`
-		TargetMasterSlotInfo *pika.SlotInfo         `json:"-"`
+		SourceMasterSlotInfo *CachedSlotInfo        `json:"-"`
+		TargetMasterSlotInfo *CachedSlotInfo        `json:"-"`
 	}{}
 }
 
