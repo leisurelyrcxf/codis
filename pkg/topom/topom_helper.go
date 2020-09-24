@@ -2,6 +2,7 @@ package topom
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/CodisLabs/codis/pkg/models"
@@ -136,22 +137,43 @@ func (s *Topom) assureTargetSlavesLinked(ctx *context, m *models.SlotMapping) er
 	return nil
 }
 
-func (s *Topom) compareMasterSlave(m *models.SlotMapping, masterAddr, slaveAddr string, gap uint64,
-	onCompareSlotOK func(sourceMaster, targetMaster string) error) error {
-	slaveReplInfo, err := s.getSlaveReplInfo(m, masterAddr, slaveAddr)
+func (s *Topom) backedUpSlot(ctx *context, m *models.SlotMapping, gap uint64) error {
+	targetMasterSlotInfo, err := s.getTargetMasterSlotInfo(m)
 	if err != nil {
 		return err
 	}
 
-	if slaveReplInfo.Status != pika.SlaveStatusBinlogSync {
-		return errors.Errorf("[%sSlot] slot-[%d] slave status not match, exp: %s, actual: %s", m.Action.State, m.Id, pika.SlaveStatusBinlogSync, slaveReplInfo.Status)
+	targetSlaveAddrs := ctx.getGroupSlaves(m.Action.TargetId)
+	if len(targetSlaveAddrs) == 0 { // intended no slaves
+		return nil
 	}
 
-	if slaveReplInfo.Lag > gap {
-		return errors.Errorf("[%sSlot] slot-[%d] %s,lag(%d)>gap(%d)", m.Action.State, m.Id, errMsgLagNotMatch, slaveReplInfo.Lag, gap)
+	if len(targetMasterSlotInfo.SlaveReplInfos) == 0 {
+		return errors.Errorf("slot-[%d] no linked slave exists on target master %s", m.Id, m.Action.Info.TargetMaster)
 	}
-	log.Infof("[%sSlot] slot-[%d] success, gap reached %d.", m.Action.State, m.Id, gap)
-	return onCompareSlotOK(masterAddr, slaveAddr)
+
+	if len(targetMasterSlotInfo.SyncedSlaves()) == 0 {
+		return errors.Errorf("slot-[%d] no synced slaves exists on target master %s", m.Id, m.Action.Info.TargetMaster)
+	}
+
+	var errs []error
+	for _, targetSlaveAddr := range targetSlaveAddrs {
+		slaveReplInfo, err := targetMasterSlotInfo.FindSlaveReplInfo(targetSlaveAddr)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if err = slaveReplInfo.GapReached(gap); err == nil {
+			return nil // at least one is enough
+		}
+		errs = append(errs, err)
+	}
+	for _, err := range errs {
+		if strings.Contains(err.Error(), pika.ErrMsgLagNotMatch) {
+			return errors.Errorf("slot-[%d] backup %s, min_lag(%d)>gap(%d)", m.Id, pika.ErrMsgLagNotMatch, targetMasterSlotInfo.GetMinReplLag(), gap)
+		}
+	}
+	return errors.Errorf("slot-[%d] backup not ok, min_lag(%d)>gap(%d)", m.Id, targetMasterSlotInfo.GetMinReplLag(), gap)
 }
 
 func (s *Topom) GetSlotMigrationProgress(m *models.SlotMapping, err error) models.SlotMigrationProgress {
@@ -169,7 +191,7 @@ func (s *Topom) GetSlotMigrationProgress(m *models.SlotMapping, err error) model
 func (s *Topom) getSlaveReplInfo(m *models.SlotMapping, masterAddr, slaveAddr string) (pika.SlaveReplInfo, error) {
 	masterSlotInfo, err := s.getMasterSlotInfo(m, masterAddr)
 	if err != nil {
-		return pika.SlaveReplInfo{}, err
+		return pika.InvalidSlaveReplInfo, err
 	}
 	return masterSlotInfo.FindSlaveReplInfo(slaveAddr)
 }

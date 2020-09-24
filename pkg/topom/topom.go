@@ -17,6 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/CodisLabs/codis/pkg/utils/pika"
+
 	"github.com/CodisLabs/codis/pkg/proxy"
 	"github.com/CodisLabs/codis/pkg/utils/assert"
 	"github.com/prometheus/client_golang/prometheus"
@@ -33,7 +35,6 @@ import (
 
 const (
 	errMsgRollback      = "rollback-ed to 'preparing'"
-	errMsgLagNotMatch   = "lag not match"
 	errMsgReplLinkNotOK = "repl link not ok"
 
 	watchReplLinkOKTimeout = 15 * time.Second
@@ -276,7 +277,7 @@ func (s *Topom) Start(routines bool) error {
 	go func() {
 		for !s.IsClosed() {
 			if s.IsOnline() {
-				if err := s.ProcessSlotAction(); err != nil && !strings.Contains(err.Error(), errMsgLagNotMatch) {
+				if err := s.ProcessSlotAction(); err != nil && !strings.Contains(err.Error(), pika.ErrMsgLagNotMatch) {
 					log.WarnErrorf(err, "process slot action failed: %v", err)
 					time.Sleep(time.Second * 5)
 				}

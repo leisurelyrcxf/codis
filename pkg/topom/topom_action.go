@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CodisLabs/codis/pkg/utils/pika"
+
 	"github.com/CodisLabs/codis/pkg/utils/errors"
 
 	"github.com/CodisLabs/codis/pkg/models"
@@ -161,7 +163,7 @@ func (s *Topom) transitionSlotStateRaw(ctx *context, m *models.SlotMapping,
 	update func(*models.SlotMapping),
 	action func(*context, *models.SlotMapping) error) (err error) {
 	if err = s.transitionSlotStateInternal(ctx, m, update, action); err != nil &&
-		!strings.Contains(err.Error(), errMsgLagNotMatch) && // Don't expose lag error to user.
+		!strings.Contains(err.Error(), pika.ErrMsgLagNotMatch) && // Don't expose lag error to user.
 		!(m.Action.State == models.ActionWatching &&
 			strings.Contains(err.Error(), errMsgReplLinkNotOK) &&
 			time.Since(m.GetStateStart()) < watchReplLinkOKTimeout) { // Don't expose repl link not ok in watch state to user
@@ -391,10 +393,8 @@ func (s *Topom) prerequisiteCleanup(ctx *context, m *models.SlotMapping) (_ erro
 	if err := s.assureTargetSlavesLinked(ctx, m); err != nil {
 		return err, time.Since(m.GetStateStart()) > s.GetSlotActionRollbackWaitPeriod() // rollback if target master down
 	}
-	return nil, false
-	// guarantee safety after cleaned up, is a v2.0.0 feature
-	//if err := s.backedUpSlot(ctx, m, 2*s.GetSlotActionGap()); err != nil {
-	//	return err, time.Since(m.GetStateStart()) > s.GetSlotActionRollbackWaitPeriod() // rollback if gap violated, otherwise wait time is uncertain.
-	//}
-	//return s.backedUpSlot(ctx, m, 0), false
+	if err := s.backedUpSlot(ctx, m, 2*s.GetSlotActionGap()); err != nil {
+		return err, time.Since(m.GetStateStart()) > s.GetSlotActionRollbackWaitPeriod() // rollback if gap violated, otherwise wait time is uncertain.
+	}
+	return s.backedUpSlot(ctx, m, 0), false
 }

@@ -1,4 +1,4 @@
-FROM pika-golang:latest
+FROM harbor.shopeemobile.com/cloud/pika-golang:latest
 
 RUN apt-get update
 RUN apt-get install -y autoconf
