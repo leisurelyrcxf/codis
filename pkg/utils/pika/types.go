@@ -1,13 +1,24 @@
 package pika
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"strings"
+
+	"github.com/CodisLabs/codis/pkg/utils/errors"
 )
 
-var ErrSlaveNotFound = errors.New("slave not found")
+const ErrMsgLagNotMatch = "lag not match"
+
+var (
+	ErrSlaveNotFound = errors.New("slave not found")
+
+	InvalidSlaveReplInfo = SlaveReplInfo{
+		Addr:   "",
+		Lag:    math.MaxUint64,
+		Status: SlaveStatusUnknown,
+	}
+)
 
 // BinlogOffset represents for binlog offset.
 type BinlogOffset struct {
@@ -57,6 +68,18 @@ func (s SlaveReplInfo) Desc(desc string) string {
 	return fmt.Sprintf("[%s] Addr: %s, Lag: %d, Status: %s", desc, s.Addr, s.Lag, s.Status)
 }
 
+func (s SlaveReplInfo) GapReached(gap uint64) error {
+	if s.Status != SlaveStatusBinlogSync {
+		return errors.Errorf("slave status not match, exp: %s, actual: %s", SlaveStatusBinlogSync, s.Status)
+	}
+
+	if s.Lag > gap {
+		return errors.Errorf("%s,lag(%d)>gap(%d)", ErrMsgLagNotMatch, s.Lag, gap)
+	}
+
+	return nil
+}
+
 // SlotInfo
 type SlotInfo struct {
 	Slot int
@@ -85,7 +108,7 @@ func (i *SlotInfo) FindSlaveReplInfo(slaveAddr string) (SlaveReplInfo, error) {
 			return slaveReplInfo, nil
 		}
 	}
-	return SlaveReplInfo{}, ErrSlaveNotFound
+	return InvalidSlaveReplInfo, ErrSlaveNotFound
 }
 
 func (i *SlotInfo) SyncedSlaves() (okSlaves []SlaveReplInfo) {

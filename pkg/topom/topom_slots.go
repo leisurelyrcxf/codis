@@ -694,8 +694,7 @@ func (s *Topom) preparingSlot(ctx *context, m *models.SlotMapping) (err error) {
 func (s *Topom) watchSlot(ctx *context, m *models.SlotMapping) error {
 	gap := s.GetSlotActionGap()
 	return s.compareSlot(ctx, m, gap, func(string, string) error {
-		return nil
-		//return s.backedUpSlot(ctx, m, gap) // v2.0.0 feature
+		return s.backedUpSlot(ctx, m, gap)
 	})
 }
 
@@ -712,7 +711,16 @@ func (s *Topom) compareSlot(ctx *context, m *models.SlotMapping, gap uint64,
 	if sourceMaster == "" || targetMaster == "" {
 		return nil
 	}
-	return s.compareMasterSlave(m, sourceMaster, targetMaster, gap, onCompareSlotOK)
+	targetMasterReplInfo, err := s.getSlaveReplInfo(m, sourceMaster, targetMaster)
+	if err != nil {
+		log.Errorf("[%sSlot] slot-[%d] can't find target master replication info: %v", m.Action.State, m.Id, err)
+		return err
+	}
+	if err := targetMasterReplInfo.GapReached(gap); err != nil {
+		log.Errorf("[%sSlot] slot-[%d] gap(%d) not reached: %v", m.Action.State, m.Id, gap, err)
+		return err
+	}
+	return onCompareSlotOK(sourceMaster, targetMaster)
 }
 
 func (s *Topom) cleanupSlot(ctx *context, m *models.SlotMapping) error {
