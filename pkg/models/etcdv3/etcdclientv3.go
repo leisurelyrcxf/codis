@@ -6,6 +6,8 @@ package etcdclientv3
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -96,26 +98,8 @@ func (c *Client) newContext() (context.Context, context.CancelFunc) {
 func (c *Client) Create(path string, data []byte) error {
 	c.Lock()
 	defer c.Unlock()
-	return c.createLocked(path, data)
-}
-
-func (c *Client) createLocked(path string, data []byte) error {
 	if c.closed {
 		return errors.Trace(ErrClosedClient)
-	}
-	if strings.IndexRune(path, '/') != 0 {
-		return fmt.Errorf("path must starts with '/'")
-	}
-
-	lastSlashIdx := strings.LastIndexByte(path, '/')
-	if lastSlashIdx != 0 {
-		err := c.createLocked(path[:lastSlashIdx], []byte{})
-		if err != nil && err != ErrKeyAlreadyExists {
-			return err
-		}
-	}
-	if lastSlashIdx == len(path)-1 {
-		return nil
 	}
 
 	ctx, cancel := c.newContext()
@@ -134,14 +118,11 @@ func (c *Client) createLocked(path string, data []byte) error {
 		log.Debugf("etcd create node %s failed: %s", path, err)
 		return err
 	}
-	log.Debugf("etcd create OK")
+	log.Debugf("etcdclientv3 create OK")
 	return nil
 }
 
 func (c *Client) Update(path string, data []byte) error {
-	if strings.LastIndexByte(path, '/') == len(path)-1 {
-		path = path[:len(path)-1]
-	}
 	c.Lock()
 	defer c.Unlock()
 	if c.closed {
@@ -160,9 +141,6 @@ func (c *Client) Update(path string, data []byte) error {
 }
 
 func (c *Client) Delete(path string) error {
-	if strings.LastIndexByte(path, '/') == len(path)-1 {
-		path = path[:len(path)-1]
-	}
 	c.Lock()
 	defer c.Unlock()
 	if c.closed {
@@ -181,9 +159,6 @@ func (c *Client) Delete(path string) error {
 }
 
 func (c *Client) Read(path string, must bool) ([]byte, error) {
-	if strings.LastIndexByte(path, '/') == len(path)-1 {
-		path = path[:len(path)-1]
-	}
 	c.Lock()
 	defer c.Unlock()
 	if c.closed {
@@ -198,7 +173,7 @@ func (c *Client) Read(path string, must bool) ([]byte, error) {
 		return nil, errors.Trace(err)
 	}
 	// Otherwise should return error instead.
-	if r.Count == 0 {
+	if len(r.Kvs) == 0 {
 		if must {
 			return nil, ErrKeyNotExists
 		}
@@ -207,24 +182,21 @@ func (c *Client) Read(path string, must bool) ([]byte, error) {
 	return r.Kvs[0].Value, nil
 }
 
-func (c *Client) List(path string, must bool) ([]string, error) {
+func (c *Client) List(path string) ([]string, error) {
 	c.Lock()
 	defer c.Unlock()
-	return c.listLocked(path, must)
+	return c.listLocked(path)
 }
 
-func (c *Client) listLocked(path string, must bool) ([]string, error) {
+func (c *Client) listLocked(path string) ([]string, error) {
 	if c.closed {
 		return nil, errors.Trace(ErrClosedClient)
-	}
-	if strings.LastIndexByte(path, '/') == len(path)-1 {
-		path = path[:len(path)-1]
 	}
 	cntx, cancel := c.newContext()
 	defer cancel()
 	opts := []clientv3.OpOption{
 		clientv3.WithPrefix(),
-		clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend),
+		clientv3.WithKeysOnly(),
 	}
 	r, err := c.kapi.Get(cntx, path, opts...)
 	switch {
@@ -232,26 +204,34 @@ func (c *Client) listLocked(path string, must bool) ([]string, error) {
 		log.Debugf("etcd list node %s failed: %s", path, err)
 		return nil, errors.Trace(err)
 	default:
-		var paths []string
+		var (
+			listedPathSet = make(map[string]struct{})
+			listedPaths   []string
+		)
 		for _, kv := range r.Kvs {
-			paths = append(paths, string(kv.Key))
-		}
-		var listedPaths []string
-		tid := -1
-		for i := 0; i < len(paths); i++ {
-			p := paths[i]
-			if strings.LastIndexByte(p, '/') == len(path) {
-				listedPaths = append(listedPaths, p)
+			key := string(kv.Key)
+			if len(key) < len(path) {
+				return nil, errors.Errorf("impossible: key_len(%d) < path_len(%d)", len(kv.Key), len(path))
 			}
-			if p == path {
-				tid = i
+			remain := key[len(path):]
+			if strings.HasPrefix(remain, "/") {
+				remain = remain[1:]
+			}
+			if remain == "" {
+				continue
+			}
+			if firstSlashIdx := strings.IndexByte(remain, '/'); firstSlashIdx != -1 {
+				listedPathSet[remain[:firstSlashIdx]] = struct{}{}
+			} else {
+				listedPathSet[remain] = struct{}{}
 			}
 		}
-		if tid == -1 && must {
-			// For backward compatibility, expect error if path not exists
-			err = ErrKeyNotExists
-			log.Debugf("etcd node %s not exists: %s", path, err)
-			return nil, err
+		for listedPath := range listedPathSet {
+			listedPaths = append(listedPaths, listedPath)
+		}
+		sort.Strings(listedPaths)
+		for idx := range listedPaths {
+			listedPaths[idx] = filepath.Join(path, listedPaths[idx])
 		}
 		return listedPaths, nil
 	}
@@ -262,9 +242,6 @@ func (c *Client) CreateEphemeral(path string, data []byte) (<-chan struct{}, err
 }
 
 func (c *Client) CreateEphemeralWithTimeout(path string, data []byte, timeout time.Duration) (ch <-chan struct{}, err error) {
-	if strings.LastIndexByte(path, '/') == len(path)-1 {
-		path = path[:len(path)-1]
-	}
 	c.Lock()
 	defer c.Unlock()
 	if c.closed {
@@ -343,9 +320,6 @@ func (c *Client) MkDir(path string) error {
 // we have to add a 10 bytes prefix to the stored data.
 // You have to use ReadEphemeralInOrder() to retrieve the data.
 func (c *Client) CreateEphemeralInOrder(path string, data []byte) (<-chan struct{}, string, error) {
-	if strings.LastIndexByte(path, '/') == len(path)-1 {
-		path = path[:len(path)-1]
-	}
 	c.Lock()
 	defer c.Unlock()
 	if c.closed {
@@ -451,9 +425,6 @@ func (c *Client) getMinMaxKeyLocked(path string, sortOrder clientv3.SortOrder) (
 	if c.closed {
 		return "", errors.Trace(ErrClosedClient)
 	}
-	if strings.LastIndexByte(path, '/') == len(path)-1 {
-		path = path[:len(path)-1]
-	}
 	cntx, cancel := c.newContext()
 	defer cancel()
 	opts := []clientv3.OpOption{
@@ -494,9 +465,6 @@ func (c *Client) ReadEphemeralInOrder(path string, must bool) ([]byte, error) {
 }
 
 func (c *Client) WatchInOrder(path string) (<-chan struct{}, []string, error) {
-	if strings.LastIndexByte(path, '/') == len(path)-1 {
-		path = path[:len(path)-1]
-	}
 	err := c.MkDir(path)
 	if err != nil && err != ErrKeyAlreadyExists {
 		return nil, nil, err
@@ -510,7 +478,7 @@ func (c *Client) WatchInOrder(path string) (<-chan struct{}, []string, error) {
 
 	log.Debugf("etcd watch-inorder node %s", path)
 
-	paths, err := c.listLocked(path, true)
+	paths, err := c.listLocked(path)
 	if err != nil {
 		return nil, nil, err
 	}

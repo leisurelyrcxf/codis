@@ -25,7 +25,7 @@ import (
 func main() {
 	const usage = `
 Usage:
-	codis-dashboard [--ncpu=N] [--config=CONF] [--log=FILE] [--log-level=LEVEL] [--host-admin=ADDR] [--pidfile=FILE] [--zookeeper=ADDR|--etcd=ADDR|--filesystem=ROOT] [--product_name=NAME] [--product_auth=AUTH] [--remove-lock] [--max-slot-num=MAXSLOTNUM]
+	codis-dashboard [--ncpu=N] [--config=CONF] [--log=FILE] [--log-level=LEVEL] [--host-admin=ADDR] [--pidfile=FILE] [--zookeeper=ADDR|--etcd=ADDR|--etcdv3=ADDR|--filesystem=ROOT] [--product_name=NAME] [--product_auth=AUTH] [--remove-lock] [--max-slot-num=MAXSLOTNUM]
 	codis-dashboard  --default-config
 	codis-dashboard  --version
 
@@ -103,6 +103,11 @@ Options:
 		config.CoordinatorName = "etcd"
 		config.CoordinatorAddr = utils.ArgumentMust(d, "--etcd")
 		log.Warnf("option --etcd = %s", config.CoordinatorAddr)
+
+	case d["--etcdv3"] != nil:
+		config.CoordinatorName = "etcdv3"
+		config.CoordinatorAddr = utils.ArgumentMust(d, "--etcdv3")
+		log.Warnf("option --etcdv3 = %s", config.CoordinatorAddr)
 
 	case d["--filesystem"] != nil:
 		config.CoordinatorName = "filesystem"

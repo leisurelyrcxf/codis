@@ -20,7 +20,7 @@ type Client interface {
 	Delete(path string) error
 
 	Read(path string, must bool) ([]byte, error)
-	List(path string, must bool) ([]string, error)
+	List(path string) ([]string, error)
 
 	Close() error
 
