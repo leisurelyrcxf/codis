@@ -265,7 +265,7 @@ type DynamicLoader struct {
 
 func (l *DynamicLoader) Reload() (map[string]string, error) {
 	var m = make(map[string]string)
-	list, err := l.client.List(models.CodisDir, false)
+	list, err := l.client.List(models.CodisDir)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

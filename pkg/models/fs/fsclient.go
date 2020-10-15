@@ -270,7 +270,11 @@ func (c *Client) Read(path string, must bool) ([]byte, error) {
 	return b, nil
 }
 
-func (c *Client) List(path string, must bool) ([]string, error) {
+func (c *Client) List(path string) ([]string, error) {
+	return c.list(path, false)
+}
+
+func (c *Client) list(path string, must bool) ([]string, error) {
 	c.Lock()
 	defer c.Unlock()
 	if c.closed {

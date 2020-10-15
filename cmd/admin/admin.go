@@ -60,6 +60,13 @@ func (t *cmdAdmin) newTopomClient(d map[string]interface{}) models.Client {
 			coordinator.auth = utils.ArgumentMust(d, "--etcd-auth")
 		}
 
+	case d["--etcdv3"] != nil:
+		coordinator.name = "etcdv3"
+		coordinator.addr = utils.ArgumentMust(d, "--etcdv3")
+		if d["--etcd-auth"] != nil {
+			coordinator.auth = utils.ArgumentMust(d, "--etcd-auth")
+		}
+
 	case d["--filesystem"] != nil:
 		coordinator.name = "filesystem"
 		coordinator.addr = utils.ArgumentMust(d, "--filesystem")
@@ -126,7 +133,7 @@ func (t *cmdAdmin) dumpConfigV1(d map[string]interface{}) {
 }
 
 func (t *cmdAdmin) dumpConfigV1Recursively(client models.Client, path string) interface{} {
-	files, err := client.List(path, false)
+	files, err := client.List(path)
 	if err != nil {
 		log.PanicErrorf(err, "list path = %s failed", path)
 	}
@@ -404,7 +411,7 @@ func (t *cmdAdmin) handleDashboardList(d map[string]interface{}) {
 	client := t.newTopomClient(d)
 	defer client.Close()
 
-	list, err := client.List(models.CodisDir, false)
+	list, err := client.List(models.CodisDir)
 	if err != nil {
 		log.PanicErrorf(err, "list products failed")
 	}

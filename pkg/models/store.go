@@ -123,7 +123,7 @@ func (s *Store) Acquire(topom *Topom) error {
 
 func (s *Store) AcquireEphemeral(topom *Topom) (ch <-chan struct{}, err error) {
 	for i := 0; i < 30; i++ {
-		if ch, err = s.client.CreateEphemeralWithTimeout(s.LockPath(), topom.Encode(), time.Second * 25); err == nil {
+		if ch, err = s.client.CreateEphemeralWithTimeout(s.LockPath(), topom.Encode(), time.Second*25); err == nil {
 			return ch, nil
 		}
 		log.Warnf("[AcquireEphemeral] acquire lock failed, err: '%v', retrying...", err)
@@ -173,7 +173,7 @@ func (s *Store) UpdateSlotMapping(m *SlotMapping) error {
 }
 
 func (s *Store) ListGroup() (map[int]*Group, error) {
-	paths, err := s.client.List(s.GroupDir(), false)
+	paths, err := s.client.List(s.GroupDir())
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +213,7 @@ func (s *Store) DeleteGroup(gid int) error {
 }
 
 func (s *Store) ListProxy() (map[string]*Proxy, error) {
-	paths, err := s.client.List(s.ProxyDir(), false)
+	paths, err := s.client.List(s.ProxyDir())
 	if err != nil {
 		return nil, err
 	}
