@@ -141,6 +141,14 @@ func (c *Client) Update(path string, data []byte) error {
 }
 
 func (c *Client) Delete(path string) error {
+	return c.delete(path, "delete node")
+}
+
+func (c *Client) Rmdir(dir string) error {
+	return c.delete(dir, "rmdir")
+}
+
+func (c *Client) delete(path string, desc string) error {
 	c.Lock()
 	defer c.Unlock()
 	if c.closed {
@@ -148,13 +156,13 @@ func (c *Client) Delete(path string) error {
 	}
 	cntx, cancel := c.newContext()
 	defer cancel()
-	log.Debugf("etcd delete node %s", path)
+	log.Debugf("etcd %s %s", desc, path)
 	_, err := c.kapi.Delete(cntx, path, clientv3.WithPrefix())
 	if err != nil {
-		log.Debugf("etcd delete node %s failed: %s", path, err)
+		log.Debugf("etcd %s %s failed: %s", desc, path, err)
 		return errors.Trace(err)
 	}
-	log.Debugf("etcd delete OK")
+	log.Debugf("etcd %s %s OK", desc, path)
 	return nil
 }
 

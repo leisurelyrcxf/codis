@@ -239,6 +239,10 @@ func (c *Client) Delete(path string) error {
 	}
 }
 
+func (c *Client) Rmdir(dir string) error {
+	return ErrNotSupported
+}
+
 func (c *Client) Read(path string, must bool) ([]byte, error) {
 	c.Lock()
 	defer c.Unlock()

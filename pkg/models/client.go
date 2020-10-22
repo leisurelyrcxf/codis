@@ -18,6 +18,7 @@ type Client interface {
 	Create(path string, data []byte) error
 	Update(path string, data []byte) error
 	Delete(path string) error
+	Rmdir(dir string) error
 
 	Read(path string, must bool) ([]byte, error)
 	List(path string) ([]string, error)
