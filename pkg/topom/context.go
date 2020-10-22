@@ -150,8 +150,14 @@ func (ctx *context) toReplicaGroups(gid int, p *models.Proxy) [][]string {
 			return 1
 		}
 	}
-	var groups [3][]string
-	for _, s := range g.Servers {
+	var (
+		groups  [3][]string
+		servers = g.Servers
+	)
+	if ctx.config.IsBackendReadSlavesOnly() {
+		servers = g.Servers[1:]
+	}
+	for _, s := range servers {
 		if s.ReplicaGroup {
 			p := getPriority(s)
 			groups[p] = append(groups[p], s.Addr)

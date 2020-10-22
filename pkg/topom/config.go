@@ -45,6 +45,7 @@ migration_async_maxbulks = 200
 migration_async_maxbytes = "32mb"
 migration_async_numkeys = 500
 migration_timeout = "30s"
+backend_read_slaves_only = false
 
 # Set configs for redis sentinel.
 sentinel_client_timeout = "10s"
@@ -77,6 +78,7 @@ type Config struct {
 	MigrationAsyncNumKeys  int               `toml:"migration_async_numkeys" json:"migration_async_numkeys"`
 	MigrationTimeout       timesize.Duration `toml:"migration_timeout" json:"migration_timeout"`
 	MigrationGap           uint64            `toml:"migration_gap" json:"migration_gap"`
+	BackendReadSlavesOnly  bool              `toml:"backend_read_slaves_only" json:"backend_read_slaves_only"`
 
 	SentinelClientTimeout        timesize.Duration `toml:"sentinel_client_timeout" json:"sentinel_client_timeout"`
 	SentinelQuorum               int               `toml:"sentinel_quorum" json:"sentinel_quorum"`
@@ -109,6 +111,13 @@ func (c *Config) LoadFromFile(path string) error {
 		return errors.Trace(err)
 	}
 	return c.Validate()
+}
+
+func (c *Config) IsBackendReadSlavesOnly() bool {
+	if c == nil {
+		return false
+	}
+	return c.BackendReadSlavesOnly
 }
 
 func (c *Config) String() string {

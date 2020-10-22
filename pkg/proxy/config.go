@@ -199,7 +199,7 @@ type Config struct {
 	MetricsReportStatsdServer     string            `toml:"metrics_report_statsd_server" json:"metrics_report_statsd_server"`
 	MetricsReportStatsdPeriod     timesize.Duration `toml:"metrics_report_statsd_period" json:"metrics_report_statsd_period"`
 	MetricsReportStatsdPrefix     string            `toml:"metrics_report_statsd_prefix" json:"metrics_report_statsd_prefix"`
-	MetricsReportPrometheusServer bool            `toml:"metrics_report_prometheus_server" json:"metrics_report_prometheus_server"`
+	MetricsReportPrometheusServer bool              `toml:"metrics_report_prometheus_server" json:"metrics_report_prometheus_server"`
 	MetricsReportPrometheusPeriod timesize.Duration `toml:"metrics_report_prometheus_period" json:"metrics_report_prometheus_period"`
 }
 

@@ -395,6 +395,7 @@ func (s *Topom) Stats() (*Stats, error) {
 			stats.HA.Masters[strconv.Itoa(gid)] = addr
 		}
 	}
+	stats.Backend.ReadSlavesOnly = s.Config().IsBackendReadSlavesOnly()
 	return stats, nil
 }
 
@@ -431,6 +432,10 @@ type Stats struct {
 		Stats   map[string]*RedisStats `json:"stats"`
 		Masters map[string]string      `json:"masters"`
 	} `json:"sentinels"`
+
+	Backend struct {
+		ReadSlavesOnly bool `json:"read_slaves_only"`
+	} `json:"backend"`
 }
 
 func (s *Topom) Config() *Config {
