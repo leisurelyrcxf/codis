@@ -140,8 +140,8 @@ func (ctx *context) toReplicaGroups(gid int, p *models.Proxy) [][]string {
 		dc = p.DataCenter
 		ip = ctx.lookupIPAddr(p.AdminAddr)
 	}
-	getPriority := func(s *models.GroupServer) int {
-		if ip == nil || dc != s.DataCenter {
+	getPriority := func(s *models.GroupServer, pid int) int {
+		if ip == nil || dc != s.DataCenter || (ctx.config.IsBackendReadSlavesOnly() && pid == 0) {
 			return 2
 		}
 		if ip.Equal(ctx.lookupIPAddr(s.Addr)) {
@@ -151,15 +151,11 @@ func (ctx *context) toReplicaGroups(gid int, p *models.Proxy) [][]string {
 		}
 	}
 	var (
-		groups  [3][]string
-		servers = g.Servers
+		groups [3][]string
 	)
-	if ctx.config.IsBackendReadSlavesOnly() {
-		servers = g.Servers[1:]
-	}
-	for _, s := range servers {
+	for pid, s := range g.Servers {
 		if s.ReplicaGroup {
-			p := getPriority(s)
+			p := getPriority(s, pid)
 			groups[p] = append(groups[p], s.Addr)
 		}
 	}
