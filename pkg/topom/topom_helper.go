@@ -227,8 +227,8 @@ func (s *Topom) backedUpSlot(ctx *context, m *models.SlotMapping, gap uint64) er
 	return errors.Errorf("slot-[%d] backup not ok, min_lag(%d)>gap(%d)", m.Id, targetMasterSlotInfo.GetMinReplLag(), gap)
 }
 
-func (s *Topom) GetSlotMigrationProgress(m *models.SlotMapping, err error) models.SlotMigrationProgress {
-	p := models.NewSlotMigrationProgress(m.Action.Info.SourceMaster, m.Action.Info.TargetMaster, err)
+func (s *Topom) GetSlotMigrationProgress(m *models.SlotMapping, rollbackTimes int, err error) models.SlotMigrationProgress {
+	p := models.NewSlotMigrationProgress(m.Action.Info.SourceMaster, m.Action.Info.TargetMaster, rollbackTimes, err)
 
 	if replInfo, err := s.getSlaveReplInfo(m, m.Action.Info.SourceMaster, m.Action.Info.TargetMaster); err == nil {
 		p.Main.TargetMaster = &replInfo

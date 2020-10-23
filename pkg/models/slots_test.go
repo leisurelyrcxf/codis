@@ -14,7 +14,7 @@ func TestSlots(t *testing.T) {
 	m.Action.Index = 1
 	m.Action.State = ActionPending
 	m.Action.TargetId = 2
-	p := NewSlotMigrationProgress("127.0.0.1", "127.0.0.2", fmt.Errorf("first error"))
+	p := NewSlotMigrationProgress("127.0.0.1", "127.0.0.2", 0, fmt.Errorf("first error"))
 	m.Action.Info.Progress = &p
 	m.Action.Info.TargetMaster = "127.0.0.1:2333"
 	assert.Must(m.Action.Info.Progress.Err.Cause == "first error")

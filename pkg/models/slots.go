@@ -60,12 +60,14 @@ type SlotMigrationProgress struct {
 		TargetMaster string               `json:"target_master"`
 		TargetSlaves []pika.SlaveReplInfo `json:"target_slaves"`
 	} `json:"backup"`
+	RollbackTimes int `json:"rollback_times"`
 }
 
-func NewSlotMigrationProgress(sourceMaster, targetMaster string, err error) SlotMigrationProgress {
+func NewSlotMigrationProgress(sourceMaster, targetMaster string, rollbackTimes int, err error) SlotMigrationProgress {
 	p := SlotMigrationProgress{}
 	p.Main.SourceMaster = sourceMaster
 	p.Backup.TargetMaster = targetMaster
+	p.RollbackTimes = rollbackTimes
 	p.Err = convertToSlotMigrationProgressErr(err)
 	return p
 }
@@ -73,7 +75,7 @@ func NewSlotMigrationProgress(sourceMaster, targetMaster string, err error) Slot
 func (p SlotMigrationProgress) IsEmpty() bool {
 	return p.Main.SourceMaster == "" && p.Main.TargetMaster == nil &&
 		p.Backup.TargetMaster == "" && len(p.Backup.TargetSlaves) == 0 &&
-		p.Err == nil
+		p.Err == nil && p.RollbackTimes == 0
 }
 
 func convertToSlotMigrationProgressErr(err error) *struct {
@@ -131,7 +133,6 @@ type SlotMapping struct {
 			TargetMaster         string                 `json:"target_master,omitempty"`
 			StateStart           *time.Time             `json:"state_start,omitempty"`
 			Progress             *SlotMigrationProgress `json:"progress,omitempty"`
-			RollbackTimes        int                    `json:"rollback_times,omitempty"`
 			SourceMasterSlotInfo *CachedSlotInfo        `json:"-"`
 			TargetMasterSlotInfo *CachedSlotInfo        `json:"-"`
 		} `json:"info"`
@@ -177,7 +178,6 @@ func (m *SlotMapping) ClearActionInfo() *SlotMapping {
 		TargetMaster         string                 `json:"target_master,omitempty"`
 		StateStart           *time.Time             `json:"state_start,omitempty"`
 		Progress             *SlotMigrationProgress `json:"progress,omitempty"`
-		RollbackTimes        int                    `json:"rollback_times,omitempty"`
 		SourceMasterSlotInfo *CachedSlotInfo        `json:"-"`
 		TargetMasterSlotInfo *CachedSlotInfo        `json:"-"`
 	}{}
