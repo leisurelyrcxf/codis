@@ -28,6 +28,8 @@ type Request struct {
 	Err error
 
 	Coalesce func() error
+
+	Retryer func(r *Request) *BackendConn
 }
 
 func (r *Request) IsBroken() bool {
