@@ -40,6 +40,7 @@ const (
 	watchReplLinkOKTimeout = 15 * time.Second
 
 	DefaultSlotActionRollbackWaitPeriod = 15 // in seconds
+	MaxRollbackTimes                    = 5
 	MinSlotActionGap                    = 50000
 )
 

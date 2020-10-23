@@ -19,6 +19,7 @@ func TestSlots(t *testing.T) {
 	m.Action.Info.TargetMaster = "127.0.0.1:2333"
 	assert.Must(m.Action.Info.Progress.Err.Cause == "first error")
 	tm := m.copyAndClearProgress()
+	assert.Must(tm != m)
 	assert.Must(tm.Action.Info.Progress == nil)
 	assert.Must(tm.Action.State == ActionPending)
 	assert.Must(m.Action.Info.Progress != nil)

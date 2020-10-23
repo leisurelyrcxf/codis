@@ -223,7 +223,8 @@ func (s *Topom) rollbackStateToPreparing(ctx *context, m *models.SlotMapping, or
 		log.Errorf("[rollbackStateToPreparing] slot-[%d] rollback to 'preparing' failed: '%v', rollback reason: '%v'", m.Id, updateErr, reason)
 		return errors.Errorf("slot-[%d] RollbackErr: '%v', RollbackReason '%v'", m.Id, updateErr, reason)
 	}
-	log.Errorf("[rollbackStateToPreparing] slot-[%d] %s due to error: '%v'", m.Id, errMsgRollback, reason)
+	log.Warnf("[rollbackStateToPreparing] slot-[%d] %s due to error: '%v'", m.Id, errMsgRollback, reason)
+	m.Action.Info.RollbackTimes++
 	return errors.Errorf("slot-[%d] %s due to error: '%v'", m.Id, errMsgRollback, reason)
 }
 

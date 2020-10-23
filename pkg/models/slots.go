@@ -131,6 +131,7 @@ type SlotMapping struct {
 			TargetMaster         string                 `json:"target_master,omitempty"`
 			StateStart           *time.Time             `json:"state_start,omitempty"`
 			Progress             *SlotMigrationProgress `json:"progress,omitempty"`
+			RollbackTimes        int                    `json:"rollback_times,omitempty"`
 			SourceMasterSlotInfo *CachedSlotInfo        `json:"-"`
 			TargetMasterSlotInfo *CachedSlotInfo        `json:"-"`
 		} `json:"info"`
@@ -176,6 +177,7 @@ func (m *SlotMapping) ClearActionInfo() *SlotMapping {
 		TargetMaster         string                 `json:"target_master,omitempty"`
 		StateStart           *time.Time             `json:"state_start,omitempty"`
 		Progress             *SlotMigrationProgress `json:"progress,omitempty"`
+		RollbackTimes        int                    `json:"rollback_times,omitempty"`
 		SourceMasterSlotInfo *CachedSlotInfo        `json:"-"`
 		TargetMasterSlotInfo *CachedSlotInfo        `json:"-"`
 	}{}
