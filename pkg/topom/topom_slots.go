@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/CodisLabs/codis/pkg/models"
-	"github.com/CodisLabs/codis/pkg/utils"
 	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/log"
 	"github.com/CodisLabs/codis/pkg/utils/math2"
@@ -673,6 +672,20 @@ func (s *Topom) preparingSlot(ctx *context, m *models.SlotMapping) (err error) {
 		return nil
 	}
 
+	if m.Action.Info.RollbackTimes >= MaxRollbackTimes {
+		log.Warnf("[preparingSlot] rollback too many times(>%d), delete slots of target group and retry", MaxRollbackTimes)
+
+		if err := s.cleanupSlotsOfGroup(ctx, m, m.Action.TargetId); err != nil {
+			log.Errorf("[preparingSlot] failed to cleanup slots of target group %d: '%s'", m.Action.TargetId, err)
+			return err
+		}
+		defer func() {
+			if err == nil {
+				m.Action.Info.RollbackTimes = 0
+			}
+		}()
+	}
+
 	if err := s.addSlotIfNotExistsSM(m, targetAddress); err != nil {
 		log.Errorf("[preparingSlot] slot-[%d] failed to add slot on target %s, err: '%v'", m.Id, targetAddress, err)
 		return err
@@ -683,12 +696,10 @@ func (s *Topom) preparingSlot(ctx *context, m *models.SlotMapping) (err error) {
 		return err
 	}
 
-	if err := s.backupSlotAsync(m, sourceAddress, targetAddress); err != nil {
+	if err = s.backupSlotAsync(m, sourceAddress, targetAddress); err != nil {
 		log.Errorf("[preparingSlot] slot-[%d] failed to create repl link target_master(%s)->source_master(%s), err: '%v'", m.Id, targetAddress, sourceAddress, err)
-		return err
 	}
-
-	return nil
+	return err
 }
 
 func (s *Topom) watchSlot(ctx *context, m *models.SlotMapping) error {
@@ -700,7 +711,7 @@ func (s *Topom) watchSlot(ctx *context, m *models.SlotMapping) error {
 
 func (s *Topom) preparedSlot(ctx *context, m *models.SlotMapping) error {
 	return s.compareSlot(ctx, m, 0, func(sourceMaster, targetMaster string) error {
-		return s.detachSlot(m, sourceMaster, targetMaster)
+		return s.detachSlotSM(m, sourceMaster, targetMaster)
 	})
 }
 
@@ -724,41 +735,12 @@ func (s *Topom) compareSlot(ctx *context, m *models.SlotMapping, gap uint64,
 }
 
 func (s *Topom) cleanupSlot(ctx *context, m *models.SlotMapping) error {
-	sourceMasterAddress := ctx.getGroupMaster(m.GroupId)
-	targetMasterAddress := ctx.getGroupMaster(m.Action.TargetId)
-	if sourceMasterAddress == "" || targetMasterAddress == "" {
+	if m.Action.Info.SourceMaster == "" || m.Action.Info.TargetMaster == "" {
 		return nil
 	}
 
-	sourceSlavesAddress := ctx.getGroupSlaves(m.GroupId)
-	for _, slaveAddress := range sourceSlavesAddress {
-		if err := s.detachSlotAsync(m, sourceMasterAddress, slaveAddress); err != nil {
-			log.Errorf("[cleanupSlot] slot-[%d] detach source slaves slot fail, slave address:%v, %v ", m.Id, slaveAddress, err)
-		}
+	if err := s.cleanupSlotsOfGroup(ctx, m, m.GroupId); err != nil {
+		log.Errorf("[cleanupSlot] failed to cleanup slots of source group %d: '%s'", m.GroupId, err)
 	}
-	if err := utils.WithRetry(time.Millisecond*100, time.Second*2, func() error {
-		sourceMasterSlotInfo, err := s.getSourceMasterSlotInfo(m)
-		if err != nil {
-			m.ClearCachedSlotInfo(sourceMasterAddress)
-			return err
-		}
-		if len(sourceMasterSlotInfo.SlaveReplInfos) == 0 {
-			return nil
-		}
-		m.ClearCachedSlotInfo(sourceMasterAddress)
-		return errors.Errorf("slot-[%d] slaves of source master %s not all unlinked", m.Id, m.Action.Info.SourceMaster)
-	}); err != nil {
-		log.Errorf("[cleanupSlot] slot-[%d] detach failed: '%v'", m.Id, err) // Not return error, best effort.
-	}
-
-	for _, slaveAddress := range sourceSlavesAddress {
-		if err := s.cleanSlotSM(m, slaveAddress); err != nil {
-			log.Errorf("[cleanupSlot] slot-[%d] clean source slave %s fail: %v ", m.Id, slaveAddress, err)
-		}
-	}
-	if err := s.cleanSlotSM(m, sourceMasterAddress); err != nil {
-		log.Errorf("[cleanupSlot] slot-[%d] clean source master %s fail: %v ", m.Id, sourceMasterAddress, err)
-	}
-
 	return nil
 }

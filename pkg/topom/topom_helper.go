@@ -83,14 +83,65 @@ func (s *Topom) slaveOfAsyncSM(m *models.SlotMapping, masterAddr, slaveAddr stri
 	return err
 }
 
-func (s *Topom) detachSlotAsync(m *models.SlotMapping, masterAddr, slaveAddr string) error {
+func (s *Topom) cleanupSlotsOfGroup(ctx *context, m *models.SlotMapping, groupID int) error {
+	masterAddr, slaveAddrs := ctx.getGroupMaster(groupID), ctx.getGroupSlaves(groupID)
+
+	if err := s.unlinkSlaves(m, masterAddr); err != nil {
+		log.Errorf("[cleanupSlotsOfGroup] failed to unlink slaves of target master '%s': '%s'", masterAddr, err)
+		return err
+	}
+
+	for _, slaveAddr := range slaveAddrs {
+		if err := s.cleanSlotSM(m, slaveAddr); err != nil {
+			log.Errorf("[cleanupSlotsOfGroup] slot-[%d] clean slot of slave %s failed: %v ", m.Id, slaveAddr, err)
+		}
+	}
+	err := s.cleanSlotSM(m, masterAddr)
+	if err != nil {
+		log.Errorf("[cleanupSlotsOfGroup] slot-[%d] clean slot of master %s failed: %v ", m.Id, masterAddr, err)
+	}
+	return err
+}
+
+func (s *Topom) unlinkSlaves(m *models.SlotMapping, masterAddr string) error {
+	masterSlotInfo, err := s.getMasterSlotInfo(m, masterAddr)
+	if err != nil {
+		return err
+	}
+	if len(masterSlotInfo.SlaveReplInfos) == 0 {
+		return nil
+	}
+
+	for _, slaveReplInfo := range masterSlotInfo.SlaveReplInfos {
+		if err := s.detachSlotAsyncSM(m, masterAddr, slaveReplInfo.Addr); err != nil {
+			log.Errorf("[unlinkSlaves] slot-[%d] detach source slave slot fail, slave address:%v: '%v'", m.Id, slaveReplInfo.Addr, err)
+		}
+	}
+	if err = utils.WithRetry(time.Millisecond*100, time.Second*2, func() error {
+		masterSlotInfo, err := s.getMasterSlotInfo(m, masterAddr)
+		if err != nil {
+			m.ClearCachedSlotInfo(masterAddr)
+			return err
+		}
+		if len(masterSlotInfo.SlaveReplInfos) == 0 {
+			return nil
+		}
+		m.ClearCachedSlotInfo(masterAddr)
+		return errors.Errorf("slot-[%d] slaves of master %s not all unlinked", m.Id, masterAddr)
+	}); err != nil {
+		log.Errorf("[unlinkSlaves] slot-[%d] detach failed: '%v'", m.Id, err)
+	}
+	return err
+}
+
+func (s *Topom) detachSlotAsyncSM(m *models.SlotMapping, masterAddr, slaveAddr string) error {
 	err := s.slaveOfAsync("no:one", slaveAddr, m.Id)
 	m.ClearCachedSlotInfo(masterAddr, slaveAddr)
 	return err
 }
 
-func (s *Topom) detachSlot(m *models.SlotMapping, masterAddr, slaveAddr string) error {
-	if err := s.detachSlotAsync(m, masterAddr, slaveAddr); err != nil {
+func (s *Topom) detachSlotSM(m *models.SlotMapping, masterAddr, slaveAddr string) error {
+	if err := s.detachSlotAsyncSM(m, masterAddr, slaveAddr); err != nil {
 		return err
 	}
 
