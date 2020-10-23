@@ -1,11 +1,9 @@
-package jemalloc_test
+package jemalloc
 
 import (
 	"reflect"
 	"testing"
 	"unsafe"
-
-	jemalloc "github.com/spinlock/jemalloc-go"
 )
 
 func toBytes(ptr unsafe.Pointer, size int) []byte {
@@ -17,7 +15,7 @@ func toBytes(ptr unsafe.Pointer, size int) []byte {
 }
 
 func TestMalloc(t *testing.T) {
-	p1 := jemalloc.Malloc(100)
+	p1 := Malloc(100)
 	if p1 == nil {
 		t.Fatalf("malloc failed")
 	}
@@ -26,7 +24,7 @@ func TestMalloc(t *testing.T) {
 		b1[i] = byte(i)
 	}
 
-	p2 := jemalloc.Realloc(p1, 200)
+	p2 := Realloc(p1, 200)
 	if p2 == nil {
 		t.Fatalf("realloc failed")
 	}
@@ -36,5 +34,5 @@ func TestMalloc(t *testing.T) {
 			t.Fatalf("realloc failed")
 		}
 	}
-	jemalloc.Free(p2)
+	Free(p2)
 }

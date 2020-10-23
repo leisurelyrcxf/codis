@@ -5,6 +5,23 @@ export GO15VENDOREXPERIMENT=1
 build-all: codis-dashboard codis-proxy codis-admin codis-ha codis-fe clean-gotest
 
 codis-deps:
+	echo "GO_MAJOR_VERSION: $(GO_MAJOR_VERSION)"
+	@if [ $(GO_MAJOR_VERSION) -ge $(MINIMUM_SUPPORTED_GO_MAJOR_VERSION) ]; then \
+		echo "Use go env -w to set GONOSUMDB, GONOPROXY, GOPRIVATE"; \
+		go env -w GONOSUMDB="git.garena.com"; \
+		go env -w GONOPROXY="git.garena.com"; \
+		go env -w GOPRIVATE="git.garena.com"; \
+	else \
+		echo "Use export env var to set GONOSUMDB, GONOPROXY, GOPRIVATE"; \
+		export GO111MODULE=on; \
+		export GONOSUMDB="git.garena.com"; \
+		export GONOPROXY="git.garena.com"; \
+		export GOPRIVATE="git.garena.com"; \
+	fi
+	go env
+	env GO111MODULE=on go mod download
+	env GO111MODULE=on go mod vendor
+
 	@mkdir -p bin config && bash version
 	@make --no-print-directory -C extern/github.com/spinlock/jemalloc-go/
 
