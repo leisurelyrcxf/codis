@@ -11,7 +11,7 @@ import (
 
 	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/log"
-	"github.com/coreos/etcd/client"
+	"go.etcd.io/etcd/v3/client"
 )
 
 var ErrClosedClient = errors.New("use of closed etcd client")
