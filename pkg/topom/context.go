@@ -90,6 +90,9 @@ func (ctx *context) toSlot(m *models.SlotMapping, p *models.Proxy) *models.Slot 
 
 		ForwardMethod: ctx.method,
 	}
+	if m.Stopped {
+		return slot
+	}
 	switch m.Action.State {
 	case models.ActionNothing, models.ActionPending:
 		slot.BackendAddr = ctx.getGroupMaster(m.GroupId)

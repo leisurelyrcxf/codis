@@ -4,7 +4,9 @@
 package topom
 
 import (
+	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/CodisLabs/codis/pkg/models"
@@ -47,6 +49,130 @@ func (s *Topom) SlotCreateAction(sid int, gid int) error {
 	m.Action.Index = ctx.maxSlotActionIndex() + 1
 	m.Action.TargetId = g.Id
 	return s.storeUpdateSlotMapping(m)
+}
+
+func (s *Topom) SlotCreateActionPlan(plan map[int]int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ctx, err := s.newContext()
+	if err != nil {
+		return err
+	}
+
+	type Task struct {
+		Addr string
+
+		MaxSlotNum int
+		Err        error
+	}
+
+	var (
+		tasks            = make(map[string]*Task)
+		slot2MasterAddrs = make(map[int]struct{ SourceMaster, TargetMaster string })
+
+		addTask = func(addrs ...string) {
+			for _, addr := range addrs {
+				if _, ok := tasks[addr]; !ok {
+					tasks[addr] = &Task{Addr: addr, MaxSlotNum: -1}
+				}
+			}
+		}
+		getMaxSlotNum = func(t *Task) int {
+			if t == nil {
+				return -1
+			}
+			return t.MaxSlotNum
+		}
+	)
+	for sid, targetGid := range plan {
+		g, err := ctx.getGroup(targetGid)
+		if err != nil {
+			return err
+		}
+		if len(g.Servers) == 0 {
+			return errors.Errorf("target group-[%d] is empty", targetGid)
+		}
+
+		m, err := ctx.getSlotMapping(sid)
+		if err != nil {
+			return err
+		}
+		if m.Action.State != models.ActionNothing {
+			return errors.Errorf("slot-[%d] action already exists", sid)
+		}
+		if m.GroupId == targetGid {
+			return errors.Errorf("slot-[%d] already in group-[%d]", sid, targetGid)
+		}
+		if m.GroupId != 0 {
+			g, err := ctx.getGroup(m.GroupId)
+			if err != nil {
+				return err
+			}
+			if len(g.Servers) == 0 {
+				return errors.Errorf("source group-[%d] is empty", targetGid)
+			}
+		}
+		if targetGid != 0 && m.GroupId != 0 {
+			info := struct{ SourceMaster, TargetMaster string }{
+				SourceMaster: ctx.getGroupMaster(m.GroupId),
+				TargetMaster: ctx.getGroupMaster(targetGid),
+			}
+			slot2MasterAddrs[m.Id] = info
+			addTask(info.SourceMaster, info.TargetMaster)
+		}
+	}
+
+	if len(tasks) > 0 {
+		var wg sync.WaitGroup
+		for _, t := range tasks {
+			wg.Add(1)
+
+			go func(t *Task) {
+				defer wg.Done()
+
+				t.Err = s.withRedisClient(t.Addr, func(client *redis.Client) (err error) {
+					t.MaxSlotNum, err = client.GetMaxSlotNum()
+					return
+				})
+			}(t)
+		}
+		wg.Wait()
+
+		for _, t := range tasks {
+			if t.Err != nil {
+				return t.Err
+			}
+			if t.MaxSlotNum <= 0 {
+				return fmt.Errorf("%s MaxSlotNum is %d", t.Addr, t.MaxSlotNum)
+			}
+		}
+	}
+
+	for sid, gid := range plan {
+		m := ctx.slots[sid]
+		defer s.dirtySlotsCache(m.Id)
+
+		m.Action.State = models.ActionPending
+		m.Action.Index = ctx.maxSlotActionIndex() + 1
+		m.Action.TargetId = gid
+		if m.Action.TargetId != 0 && m.GroupId != 0 {
+			info := slot2MasterAddrs[m.Id]
+			srcMaxSlotNum, targetMaxSlotNum := getMaxSlotNum(tasks[info.SourceMaster]), getMaxSlotNum(tasks[info.TargetMaster])
+			if srcMaxSlotNum <= 0 || targetMaxSlotNum <= 0 {
+				return fmt.Errorf("unreachable code, %v srcMaxSlotNum(%d) <= 0 || %v targetMaxSlotNum(%d) <= 0",
+					info.SourceMaster, srcMaxSlotNum, info.TargetMaster, targetMaxSlotNum)
+			}
+			if targetMaxSlotNum > srcMaxSlotNum {
+				m.Action.Resharding = true
+				m.Action.SourceMaxSlotNum = srcMaxSlotNum
+			}
+		}
+		if err := s.storeUpdateSlotMapping(m); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Topom) SlotCreateActionSome(groupFrom, groupTo int, numSlots int) error {
@@ -478,6 +604,43 @@ func (s *Topom) SlotsAssignOffline(slots []*models.SlotMapping) error {
 	return s.resyncSlotMappings(ctx, slots...)
 }
 
+func (s *Topom) SlotsSetStopStatus(slots []int, stopped bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ctx, err := s.newContext()
+	if err != nil {
+		return err
+	}
+
+	for _, slot := range slots {
+		m, err := ctx.getSlotMapping(slot)
+		if err != nil {
+			return err
+		}
+		if m.Action.State != models.ActionNothing {
+			return errors.Errorf("slot-[%d] is migrating", m.Id)
+		}
+	}
+
+	updatedSlotMappings := make([]*models.SlotMapping, 0, len(slots))
+	for _, slot := range slots {
+		defer s.dirtySlotsCache(slot)
+
+		m := ctx.slots[slot]
+		if stopped {
+			log.Warnf("slot-[%d] will be stopped", m.Id)
+		} else {
+			log.Warnf("slot-[%d] will be started", m.Id)
+		}
+		m.Stopped = stopped
+		if err := s.storeUpdateSlotMapping(m); err != nil {
+			return err
+		}
+		updatedSlotMappings = append(updatedSlotMappings, m)
+	}
+	return s.resyncSlotMappings(ctx, updatedSlotMappings...)
+}
+
 func (s *Topom) SlotsRebalance(confirm bool) (map[int]int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -696,7 +859,7 @@ func (s *Topom) preparingSlot(ctx *context, m *models.SlotMapping) (err error) {
 		return err
 	}
 
-	if err = s.backupSlotAsync(m, sourceAddress, targetAddress); err != nil {
+	if err = s.createReplLink(m, sourceAddress, targetAddress); err != nil {
 		log.Errorf("[preparingSlot] slot-[%d] failed to create repl link target_master(%s)->source_master(%s), err: '%v'", m.Id, targetAddress, sourceAddress, err)
 	}
 	return err
@@ -737,6 +900,17 @@ func (s *Topom) compareSlot(ctx *context, m *models.SlotMapping, gap uint64,
 func (s *Topom) cleanupSlot(ctx *context, m *models.SlotMapping) error {
 	if m.Action.Info.SourceMaster == "" || m.Action.Info.TargetMaster == "" {
 		return nil
+	}
+
+	if m.Action.Resharding {
+		for _, am := range ctx.slots {
+			if am.Id != m.Id &&
+				am.GroupId == m.GroupId &&
+				am.Id%m.Action.SourceMaxSlotNum == m.Id%m.Action.SourceMaxSlotNum {
+				log.Infof("[cleanupSlot] skip cleanup, another slot %d exists for same group", am.Id, am.GroupId)
+				return nil
+			}
+		}
 	}
 
 	if err := s.cleanupSlotsOfGroup(ctx, m, m.GroupId); err != nil {

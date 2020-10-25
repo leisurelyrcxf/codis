@@ -550,7 +550,7 @@ func (s *Topom) SlaveOfMaster(addr string, slots []int, force bool) error {
 			if masterSlotsInfo[slot].IsLinked(slaveAddr) {
 				continue
 			}
-			if slaveOfErr := client.SlaveOf(masterAddr, slot, force); slaveOfErr != nil {
+			if slaveOfErr := client.SlaveOf(masterAddr, slot, force, false); slaveOfErr != nil {
 				log.Errorf("[SlaveOfMaster] %s slave of master %s failed: %v", slaveAddr, masterAddr, slaveOfErr)
 				err = slaveOfErr
 			}

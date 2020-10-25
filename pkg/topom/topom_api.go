@@ -115,6 +115,7 @@ func newApiServer(t *Topom) http.Handler {
 		r.Group("/slots", func(r martini.Router) {
 			r.Group("/action", func(r martini.Router) {
 				r.Put("/create/:xauth/:sid/:gid", api.SlotCreateAction)
+				r.Put("/create-plan/:xauth", binding.Json([]*models.SlotMapping{}), api.SlotCreateActionPlan)
 				r.Put("/create-some/:xauth/:src/:dst/:num", api.SlotCreateActionSome)
 				r.Put("/create-range/:xauth/:beg/:end/:gid", api.SlotCreateActionRange)
 				r.Put("/remove/:xauth/:sid", api.SlotRemoveAction)
@@ -126,6 +127,8 @@ func newApiServer(t *Topom) http.Handler {
 			})
 			r.Put("/assign/:xauth", binding.Json([]*models.SlotMapping{}), api.SlotsAssignGroup)
 			r.Put("/assign/:xauth/offline", binding.Json([]*models.SlotMapping{}), api.SlotsAssignOffline)
+			r.Put("/stop/:xauth", binding.Json([]*models.SlotMapping{}), api.SlotsStop)
+			r.Put("/start/:xauth", binding.Json([]*models.SlotMapping{}), api.SlotsStart)
 			r.Put("/rebalance/:xauth/:confirm", api.SlotsRebalance)
 			r.Put("/slave-of-master/:xauth/:addr/:force", binding.Json([]*models.SlotMapping{}), api.SlaveOfMaster)
 		})
@@ -650,6 +653,16 @@ func (s *apiServer) SlotCreateAction(params martini.Params) (int, string) {
 	}
 }
 
+func (s *apiServer) SlotCreateActionPlan(slotMappings []*models.SlotMapping, params martini.Params) (int, string) {
+	if err := s.verifyXAuth(params); err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	if err := s.topom.SlotCreateActionPlan(toPlan(slotMappings)); err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	return rpc.ApiResponseJson("OK")
+}
+
 func (s *apiServer) SlotCreateActionSome(params martini.Params) (int, string) {
 	if err := s.verifyXAuth(params); err != nil {
 		return rpc.ApiResponseError(err)
@@ -823,6 +836,26 @@ func (s *apiServer) SlotsAssignOffline(slots []*models.SlotMapping, params marti
 	return rpc.ApiResponseJson("OK")
 }
 
+func (s *apiServer) SlotsStop(slots []*models.SlotMapping, params martini.Params) (int, string) {
+	if err := s.verifyXAuth(params); err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	if err := s.topom.SlotsSetStopStatus(toSlots(slots), true); err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	return rpc.ApiResponseJson("OK")
+}
+
+func (s *apiServer) SlotsStart(slots []*models.SlotMapping, params martini.Params) (int, string) {
+	if err := s.verifyXAuth(params); err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	if err := s.topom.SlotsSetStopStatus(toSlots(slots), false); err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	return rpc.ApiResponseJson("OK")
+}
+
 func (s *apiServer) SlotsRebalance(params martini.Params) (int, string) {
 	if err := s.verifyXAuth(params); err != nil {
 		return rpc.ApiResponseError(err)
@@ -854,7 +887,7 @@ func (s *apiServer) SlaveOfMaster(slotMappings []*models.SlotMapping, params mar
 	if err != nil {
 		return rpc.ApiResponseError(err)
 	}
-	if err := s.topom.SlaveOfMaster(addr, toSlots(slotMappings), force != 0); err != nil {
+	if err := s.topom.SlaveOfMaster(addr, toSlots(slotMappings), int2Bool(force)); err != nil {
 		return rpc.ApiResponseError(err)
 	}
 	return rpc.ApiResponseJson("OK")
@@ -1054,6 +1087,11 @@ func (c *ApiClient) SlotCreateActionSome(groupFrom, groupTo int, numSlots int) e
 	return rpc.ApiPutJson(url, nil, nil)
 }
 
+func (c *ApiClient) SlotCreateActionPlan(plan map[int]int) error {
+	url := c.encodeURL("/api/topom/slots/action/create-plan/%s", c.xauth)
+	return rpc.ApiPutJson(url, planToSlotMappings(plan), nil)
+}
+
 func (c *ApiClient) SlotCreateActionRange(beg, end int, gid int) error {
 	url := c.encodeURL("/api/topom/slots/action/create-range/%s/%d/%d/%d", c.xauth, beg, end, gid)
 	return rpc.ApiPutJson(url, nil, nil)
@@ -1103,6 +1141,16 @@ func (c *ApiClient) SlotsAssignOffline(slots []*models.SlotMapping) error {
 	return rpc.ApiPutJson(url, slots, nil)
 }
 
+func (c *ApiClient) SlotsStop(slots []int) error {
+	url := c.encodeURL("/api/topom/slots/stop/%s", c.xauth)
+	return rpc.ApiPutJson(url, toSlotMappings(slots), nil)
+}
+
+func (c *ApiClient) SlotsStart(slots []int) error {
+	url := c.encodeURL("/api/topom/slots/start/%s", c.xauth)
+	return rpc.ApiPutJson(url, toSlotMappings(slots), nil)
+}
+
 func (c *ApiClient) SlotsRebalance(confirm bool) (map[int]int, error) {
 	var value int
 	if confirm {
@@ -1126,12 +1174,19 @@ func (c *ApiClient) SlotsRebalance(confirm bool) (map[int]int, error) {
 }
 
 func (c *ApiClient) SlaveOfMaster(addr string, slots []int, force bool) error {
-	var value int
-	if force {
-		value = 1
-	}
-	url := c.encodeURL("/api/topom/slots/slave-of-master/%s/%s/%d", c.xauth, addr, value)
+	url := c.encodeURL("/api/topom/slots/slave-of-master/%s/%s/%d", c.xauth, addr, bool2Int(force))
 	return rpc.ApiPutJson(url, toSlotMappings(slots), nil)
+}
+
+func bool2Int(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func int2Bool(i int) bool {
+	return i != 0
 }
 
 func toSlotMappings(slots []int) []*models.SlotMapping {
@@ -1150,4 +1205,23 @@ func toSlots(slotMappings []*models.SlotMapping) []int {
 		slots[i] = sm.Id
 	}
 	return slots
+}
+
+func planToSlotMappings(plan map[int]int) []*models.SlotMapping {
+	slotMappings := make([]*models.SlotMapping, 0, len(plan))
+	for slot, targetGroupID := range plan {
+		sm := &models.SlotMapping{Id: slot}
+		sm.Action.TargetId = targetGroupID
+
+		slotMappings = append(slotMappings, sm)
+	}
+	return slotMappings
+}
+
+func toPlan(slotMappings []*models.SlotMapping) (plan map[int]int) {
+	plan = make(map[int]int)
+	for _, sm := range slotMappings {
+		plan[sm.Id] = sm.Action.TargetId
+	}
+	return
 }
