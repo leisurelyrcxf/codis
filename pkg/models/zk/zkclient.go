@@ -323,6 +323,10 @@ func (c *Client) Delete(path string) error {
 	return nil
 }
 
+func (c *Client) Rmdir(dir string) error {
+	return fmt.Errorf("not supported")
+}
+
 func (c *Client) Read(path string, must bool) ([]byte, error) {
 	c.Lock()
 	defer c.Unlock()

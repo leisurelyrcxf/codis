@@ -62,11 +62,11 @@ func New(addrlist string, auth string, timeout time.Duration) (*Client, error) {
 		return nil, errors.Trace(err)
 	}
 
-	client := &Client{
+	cli := &Client{
 		kapi: client.NewKeysAPI(c), timeout: timeout,
 	}
-	client.context, client.cancel = context.WithCancel(context.Background())
-	return client, nil
+	cli.context, cli.cancel = context.WithCancel(context.Background())
+	return cli, nil
 }
 
 func (c *Client) Close() error {
@@ -171,6 +171,24 @@ func (c *Client) Delete(path string) error {
 		return errors.Trace(err)
 	}
 	log.Debugf("etcd delete OK")
+	return nil
+}
+
+func (c *Client) Rmdir(dir string) error {
+	c.Lock()
+	defer c.Unlock()
+	if c.closed {
+		return errors.Trace(ErrClosedClient)
+	}
+	cntx, cancel := c.newContext()
+	defer cancel()
+	log.Debugf("etcd rmdir %s", dir)
+	_, err := c.kapi.Delete(cntx, dir, &client.DeleteOptions{Recursive: true, Dir: true})
+	if err != nil && !isErrNoNode(err) {
+		log.Debugf("etcd rmdir %s failed: %s", dir, err)
+		return errors.Trace(err)
+	}
+	log.Debugf("etcd rmdir %s OK", dir)
 	return nil
 }
 
