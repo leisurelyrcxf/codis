@@ -334,13 +334,30 @@ func (c *Client) SlotInfo(slot int) (pika.SlotInfo, error) {
 	return pika.ParseSlotInfo(infoReplyStr)
 }
 
-func (c *Client) SlaveOf(masterAddr string, slot int) error {
+func (c *Client) PkSlotsInfo() (map[int]pika.SlotInfo, error) {
+	infoReply, err := c.Do("pkcluster", "info", "slot")
+	if err != nil {
+		return nil, err
+	}
+	infoReplyStr, err := redigo.String(infoReply, nil)
+	if err != nil {
+		return nil, err
+	}
+	return pika.ParseSlotsInfo(infoReplyStr)
+}
+
+func (c *Client) SlaveOf(masterAddr string, slot int, force bool) error {
 	host, port, err := net.SplitHostPort(masterAddr)
 	if err != nil {
 		log.Warnf("[SlaveOf] split host %s err: '%v'", masterAddr, err)
 		return err
 	}
-	_, err = c.Do("pkcluster", "slotsslaveof", host, port, slot)
+
+	args := []interface{}{"slotsslaveof", host, port, slot}
+	if force {
+		args = append(args, "force")
+	}
+	_, err = c.Do("pkcluster", args...)
 	return err
 }
 

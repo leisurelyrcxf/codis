@@ -316,6 +316,7 @@ func runRefreshEphemeral(c *Client, leaseID clientv3.LeaseID) (<-chan struct{}, 
 			// eat messages until keep alive channel closes
 		}
 	}()
+	cancel = nil // suppress go-vet warning
 	return signal, nil
 }
 

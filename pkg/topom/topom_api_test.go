@@ -106,3 +106,12 @@ func TestApiProxy(x *testing.T) {
 	assert.MustNoError(c.ReinitProxy(p.Token))
 	assert.MustNoError(c.RemoveProxy(p.Token, false))
 }
+
+func TestSlaveOfMaster(t *testing.T) {
+	apiClient := NewApiClient("localhost:18080")
+	apiClient.SetXAuth("codis-etcd")
+	err := apiClient.SlaveOfMaster("127.0.0.1:56380", []int{4, 1}, false)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+}

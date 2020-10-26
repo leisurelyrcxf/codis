@@ -111,6 +111,11 @@ func (i *SlotInfo) FindSlaveReplInfo(slaveAddr string) (SlaveReplInfo, error) {
 	return InvalidSlaveReplInfo, ErrSlaveNotFound
 }
 
+func (i SlotInfo) IsLinked(slaveAddr string) bool {
+	slaveReplInfo, _ := i.FindSlaveReplInfo(slaveAddr)
+	return slaveReplInfo.Status == SlaveStatusBinlogSync
+}
+
 func (i *SlotInfo) SyncedSlaves() (okSlaves []SlaveReplInfo) {
 	for _, slave := range i.SlaveReplInfos {
 		if slave.Status == SlaveStatusBinlogSync {

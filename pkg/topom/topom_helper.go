@@ -31,6 +31,13 @@ func (s *Topom) getPikaSlotInfo(addr string, slot int) (slotInfo pika.SlotInfo, 
 	})
 }
 
+func (s *Topom) getPikaSlotsInfo(addr string) (slotsInfo map[int]pika.SlotInfo, _ error) {
+	return slotsInfo, s.withRedisClient(addr, func(client *redis.Client) (err error) {
+		slotsInfo, err = client.PkSlotsInfo()
+		return
+	})
+}
+
 func (s *Topom) addSlotIfNotExists(addr string, slot int) error {
 	err := s.withRedisClient(addr, func(client *redis.Client) error {
 		return client.AddSlot(slot)
@@ -58,9 +65,9 @@ func (s *Topom) cleanSlot(addr string, slot int) error {
 	return err
 }
 
-func (s *Topom) slaveOfAsync(masterAddr, slaveAddr string, slot int) error {
+func (s *Topom) slaveOfAsync(masterAddr, slaveAddr string, slot int, force bool) error {
 	return s.withRedisClient(slaveAddr, func(client *redis.Client) error {
-		return client.SlaveOf(masterAddr, slot)
+		return client.SlaveOf(masterAddr, slot, force)
 	})
 }
 
@@ -77,8 +84,8 @@ func (s *Topom) cleanSlotSM(m *models.SlotMapping, addr string) error {
 	return err
 }
 
-func (s *Topom) slaveOfAsyncSM(m *models.SlotMapping, masterAddr, slaveAddr string) error {
-	err := s.slaveOfAsync(masterAddr, slaveAddr, m.Id)
+func (s *Topom) slaveOfAsyncSM(m *models.SlotMapping, masterAddr, slaveAddr string, force bool) error {
+	err := s.slaveOfAsync(masterAddr, slaveAddr, m.Id, force)
 	m.ClearCachedSlotInfo(masterAddr, slaveAddr)
 	return err
 }
@@ -135,7 +142,7 @@ func (s *Topom) unlinkSlaves(m *models.SlotMapping, masterAddr string) error {
 }
 
 func (s *Topom) detachSlotAsyncSM(m *models.SlotMapping, masterAddr, slaveAddr string) error {
-	err := s.slaveOfAsync("no:one", slaveAddr, m.Id)
+	err := s.slaveOfAsync("no:one", slaveAddr, m.Id, false)
 	m.ClearCachedSlotInfo(masterAddr, slaveAddr)
 	return err
 }
@@ -160,7 +167,7 @@ func (s *Topom) backupSlotAsync(m *models.SlotMapping, masterAddress, slaveAddre
 		return err
 	}
 
-	if err := s.slaveOfAsyncSM(m, masterAddress, slaveAddress); err != nil {
+	if err := s.slaveOfAsyncSM(m, masterAddress, slaveAddress, false); err != nil {
 		log.Errorf("[backupSlotAsync] slot-[%d] failed to slaveof %s for target %s, err: '%v'", m.Id, masterAddress, slaveAddress, err)
 		return err
 	}

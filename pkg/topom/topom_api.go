@@ -127,6 +127,7 @@ func newApiServer(t *Topom) http.Handler {
 			r.Put("/assign/:xauth", binding.Json([]*models.SlotMapping{}), api.SlotsAssignGroup)
 			r.Put("/assign/:xauth/offline", binding.Json([]*models.SlotMapping{}), api.SlotsAssignOffline)
 			r.Put("/rebalance/:xauth/:confirm", api.SlotsRebalance)
+			r.Put("/slave-of-master/:xauth/:addr/:force", binding.Json([]*models.SlotMapping{}), api.SlaveOfMaster)
 		})
 		r.Group("/sentinels", func(r martini.Router) {
 			r.Put("/add/:xauth/:addr", api.AddSentinel)
@@ -841,6 +842,24 @@ func (s *apiServer) SlotsRebalance(params martini.Params) (int, string) {
 	}
 }
 
+func (s *apiServer) SlaveOfMaster(slotMappings []*models.SlotMapping, params martini.Params) (int, string) {
+	if err := s.verifyXAuth(params); err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	addr, err := s.parseAddr(params)
+	if err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	force, err := s.parseInteger(params, "force")
+	if err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	if err := s.topom.SlaveOfMaster(addr, toSlots(slotMappings), force != 0); err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	return rpc.ApiResponseJson("OK")
+}
+
 type ApiClient struct {
 	addr  string
 	xauth string
@@ -1104,4 +1123,31 @@ func (c *ApiClient) SlotsRebalance(confirm bool) (map[int]int, error) {
 		}
 		return m, nil
 	}
+}
+
+func (c *ApiClient) SlaveOfMaster(addr string, slots []int, force bool) error {
+	var value int
+	if force {
+		value = 1
+	}
+	url := c.encodeURL("/api/topom/slots/slave-of-master/%s/%s/%d", c.xauth, addr, value)
+	return rpc.ApiPutJson(url, toSlotMappings(slots), nil)
+}
+
+func toSlotMappings(slots []int) []*models.SlotMapping {
+	slotMappings := make([]*models.SlotMapping, len(slots))
+	for i, slot := range slots {
+		slotMappings[i] = &models.SlotMapping{
+			Id: slot,
+		}
+	}
+	return slotMappings
+}
+
+func toSlots(slotMappings []*models.SlotMapping) []int {
+	slots := make([]int, len(slotMappings))
+	for i, sm := range slotMappings {
+		slots[i] = sm.Id
+	}
+	return slots
 }
