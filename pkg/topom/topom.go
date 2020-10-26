@@ -663,12 +663,12 @@ func (p *Topom) collectPrometheusMetrics() {
 	)
 
 	var (
-		cmdNamespace = "cmd"
+		cmdNamespace = "codis_proxy_cmd"
 
 		cmdMetrics = map[string]string{
-			"latency": "cmd latency",
-			"total":   "cmd total",
-			"failure": "cmd failure",
+			"user_seconds": "cmd user seconds",
+			"total":        "cmd total",
+			"failure":      "cmd failure",
 		}
 
 		cmdGauges = make(map[string]*prometheus.GaugeVec)
@@ -882,9 +882,9 @@ func (p *Topom) collectPrometheusMetrics() {
 					proxyGauges[metric].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr}).Set(fv)
 				}
 
-				if ps != nil && ps.Stats != nil && len(ps.Stats.Ops.Cmd) > 0 {
+				if ps != nil && ps.Stats != nil {
 					for _, cmd := range ps.Stats.Ops.Cmd {
-						cmdGauges["latency"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr, LabelCmdName: cmd.OpStr}).Set(float64(cmd.UsecsPercall))
+						cmdGauges["user_seconds"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr, LabelCmdName: cmd.OpStr}).Set(float64(cmd.Usecs))
 						cmdGauges["total"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr, LabelCmdName: cmd.OpStr}).Set(float64(cmd.Calls))
 						cmdGauges["failure"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr, LabelCmdName: cmd.OpStr}).Set(float64(cmd.Fails))
 					}
