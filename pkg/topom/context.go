@@ -5,6 +5,7 @@ package topom
 
 import (
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,7 +38,10 @@ func (ctx *context) getSlotMapping(sid int) (*models.SlotMapping, error) {
 		return nil, errors.Errorf("invalid number of slots = %d/%d", len(ctx.slots), ctx.config.MaxSlotNum)
 	}
 	if sid >= 0 && sid < ctx.config.MaxSlotNum {
-		return ctx.slots[sid], nil
+		if sm := ctx.slots[sid]; sm != nil {
+			return sm, nil
+		}
+		return nil, errors.Errorf("slot-[%d] is nil", sid)
 	}
 	return nil, errors.Errorf("slot-[%d] doesn't exist", sid)
 }
@@ -122,6 +126,17 @@ func (ctx *context) lookupIPAddr(addr string) net.IP {
 		}
 	}
 	return ip
+}
+
+func (ctx *context) lookupPika(addr string) (pidInGroup int, _ *models.Group, _ error) {
+	for _, g := range ctx.group {
+		for pid, s := range g.Servers {
+			if strings.ReplaceAll(s.Addr, "localhost", "127.0.0.1") == addr {
+				return pid, g, nil
+			}
+		}
+	}
+	return -1, nil, errors.Errorf("can't find pika addr: '%s'", addr)
 }
 
 func (ctx *context) toReplicaGroups(gid int, p *models.Proxy) [][]string {

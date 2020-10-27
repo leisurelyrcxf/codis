@@ -509,6 +509,56 @@ func (s *Topom) Slots() ([]*models.Slot, error) {
 	return ctx.toSlotSlice(ctx.slots, nil), nil
 }
 
+func (s *Topom) SlaveOfMaster(addr string, slots []int, force bool) error {
+	if len(slots) == 0 {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ctx, err := s.newContext()
+	if err != nil {
+		return err
+	}
+	for _, slot := range slots {
+		if _, err := ctx.getSlotMapping(slot); err != nil {
+			return err
+		}
+	}
+
+	pid, g, err := ctx.lookupPika(addr)
+	if err != nil {
+		return err
+	}
+	if pid == 0 {
+		return nil
+	}
+
+	masterAddr, slaveAddr := g.Servers[0].Addr, addr
+	masterSlotsInfo, err := s.getPikaSlotsInfo(masterAddr)
+	if err != nil {
+		return errors.Errorf("can't get master %s slots info: '%v'", masterAddr, err)
+	}
+	for _, slot := range slots {
+		if _, ok := masterSlotsInfo[slot]; !ok {
+			return errors.Errorf("slot %d doesn't exist on master %s", slot, masterAddr)
+		}
+	}
+	return s.withRedisClient(slaveAddr, func(client *redis.Client) (err error) {
+		for _, slot := range slots {
+			if masterSlotsInfo[slot].IsLinked(slaveAddr) {
+				continue
+			}
+			if slaveOfErr := client.SlaveOf(masterAddr, slot, force); slaveOfErr != nil {
+				log.Errorf("[SlaveOfMaster] %s slave of master %s failed: %v", slaveAddr, masterAddr, slaveOfErr)
+				err = slaveOfErr
+			}
+		}
+		return
+	})
+}
+
 func (s *Topom) Reload() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
