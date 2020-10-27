@@ -78,6 +78,10 @@ func (bc *BackendConn) PushBack(r *Request) {
 	bc.input <- r
 }
 
+func (bc *BackendConn) PushBackWithoutUpdatingBatch(r *Request) {
+	bc.input <- r
+}
+
 func (bc *BackendConn) KeepAlive() bool {
 	if len(bc.input) != 0 {
 		return false
@@ -238,6 +242,18 @@ func (bc *BackendConn) selectDatabase(c *redis.Conn, database int) error {
 	}
 }
 
+func (bc *BackendConn) handleRequestError(r *Request, err error) error {
+	if IsBackendConnError(err) && r.Retryer != nil {
+		if nbc := r.Retryer(r); nbc != nil {
+			nbc.PushBackWithoutUpdatingBatch(r)
+			log.Warnf("[handleRequestError] backend %s failed: '%v', retry by re-routing to '%s'", bc.addr, err, nbc.addr)
+			return err
+		}
+		log.Warnf("[handleRequestError] backend %s failed: '%v', re-routing failed: can't find new backend conn", bc.addr, err)
+	}
+	return bc.setResponse(r, nil, err)
+}
+
 func (bc *BackendConn) setResponse(r *Request, resp *redis.Resp, err error) error {
 	r.Resp, r.Err = resp, err
 	if r.Group != nil {
@@ -249,10 +265,22 @@ func (bc *BackendConn) setResponse(r *Request, resp *redis.Resp, err error) erro
 	return err
 }
 
+const (
+	ErrMsgBackendConn = "backend connection"
+)
+
 var (
-	ErrBackendConnReset = errors.New("backend conn reset")
+	ErrBackendConnReset = errors.Errorf("%s reset", ErrMsgBackendConn)
 	ErrRequestIsBroken  = errors.New("request is broken")
 )
+
+func genBackendFailureError(err error) error {
+	return fmt.Errorf("%s failure, %s", ErrMsgBackendConn, err)
+}
+
+func IsBackendConnError(err error) bool {
+	return strings.Contains(err.Error(), ErrMsgBackendConn)
+}
 
 func (bc *BackendConn) run() {
 	log.Warnf("backend conn [%p] to %s, db-%d start service",
@@ -275,9 +303,9 @@ var (
 
 func (bc *BackendConn) loopReader(tasks <-chan *Request, c *redis.Conn, round int) (err error) {
 	defer func() {
-		c.Close()
+		_ = c.Close()
 		for r := range tasks {
-			bc.setResponse(r, nil, ErrBackendConnReset)
+			_ = bc.handleRequestError(r, ErrBackendConnReset)
 		}
 		log.WarnErrorf(err, "backend conn [%p] to %s, db-%d reader-[%d] exit",
 			bc, bc.addr, bc.database, round)
@@ -285,7 +313,7 @@ func (bc *BackendConn) loopReader(tasks <-chan *Request, c *redis.Conn, round in
 	for r := range tasks {
 		resp, err := c.Decode()
 		if err != nil {
-			return bc.setResponse(r, nil, fmt.Errorf("backend conn failure, %s", err))
+			return bc.handleRequestError(r, genBackendFailureError(err))
 		}
 		if resp != nil && resp.IsError() {
 			switch {
@@ -301,7 +329,7 @@ func (bc *BackendConn) loopReader(tasks <-chan *Request, c *redis.Conn, round in
 				}
 			}
 		}
-		bc.setResponse(r, resp, nil)
+		_ = bc.setResponse(r, resp, nil)
 	}
 	return nil
 }
@@ -320,7 +348,7 @@ func (bc *BackendConn) delayBeforeRetry() {
 			if !ok {
 				return
 			}
-			bc.setResponse(r, nil, ErrBackendConnReset)
+			_ = bc.handleRequestError(r, ErrBackendConnReset)
 		}
 	}
 }
@@ -329,7 +357,7 @@ func (bc *BackendConn) loopWriter(round int) (err error) {
 	defer func() {
 		for i := len(bc.input); i != 0; i-- {
 			r := <-bc.input
-			bc.setResponse(r, nil, ErrBackendConnReset)
+			_ = bc.handleRequestError(r, ErrBackendConnReset)
 		}
 		log.WarnErrorf(err, "backend conn [%p] to %s, db-%d writer-[%d] exit",
 			bc, bc.addr, bc.database, round)
@@ -352,14 +380,14 @@ func (bc *BackendConn) loopWriter(round int) (err error) {
 
 	for r := range bc.input {
 		if r.IsReadOnly() && r.IsBroken() {
-			bc.setResponse(r, nil, ErrRequestIsBroken)
+			_ = bc.handleRequestError(r, ErrRequestIsBroken)
 			continue
 		}
 		if err := p.EncodeMultiBulk(r.Multi); err != nil {
-			return bc.setResponse(r, nil, fmt.Errorf("backend conn failure, %s", err))
+			return bc.handleRequestError(r, genBackendFailureError(err))
 		}
 		if err := p.Flush(len(bc.input) == 0); err != nil {
-			return bc.setResponse(r, nil, fmt.Errorf("backend conn failure, %s", err))
+			return bc.handleRequestError(r, genBackendFailureError(err))
 		} else {
 			tasks <- r
 		}

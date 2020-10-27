@@ -58,7 +58,7 @@ func (d *forwardSync) process(s *Slot, r *Request, hkey []byte) (*BackendConn, e
 	}
 	r.Group = &s.refs
 	r.Group.Add(1)
-	return d.forward2(s, r), nil
+	return d.forward2(s, r, ""), nil
 }
 
 type forwardSemiAsync struct {
@@ -128,7 +128,7 @@ func (d *forwardSemiAsync) process(s *Slot, r *Request, hkey []byte) (_ *Backend
 	}
 	r.Group = &s.refs
 	r.Group.Add(1)
-	return d.forward2(s, r), false, nil
+	return d.forward2(s, r, ""), false, nil
 }
 
 type forwardHelper struct {
@@ -213,14 +213,23 @@ func (d *forwardHelper) slotsmgrtExecWrapper(s *Slot, hkey []byte, database int3
 	}
 }
 
-func (d *forwardHelper) forward2(s *Slot, r *Request) *BackendConn {
+func (d *forwardHelper) forward2(s *Slot, r *Request, excludeAddr string) *BackendConn {
 	var database, seed = r.Database, r.Seed16()
 	if s.migrate.bc == nil && !r.IsMasterOnly() && len(s.replicaGroups) != 0 {
 		for _, group := range s.replicaGroups {
 			var i = seed
 			for range group {
 				i = (i + 1) % uint(len(group))
-				if bc := group[i].BackendConn(database, seed, false); bc != nil {
+				if bc := group[i].BackendConn(database, seed, false); bc != nil && bc.addr != excludeAddr {
+					if r.Retryer == nil {
+						bcAddr := bc.addr
+						r.Retryer = func(r *Request) *BackendConn {
+							return d.forward2(s, r, bcAddr)
+						}
+					} else {
+						// Retry at most once
+						r.Retryer = nil
+					}
 					return bc
 				}
 			}
