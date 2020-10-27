@@ -171,7 +171,7 @@ func TestClient_List(t *testing.T) {
 		return
 	}
 
-	keys, err := c.List(testRoot, true)
+	keys, err := c.list(testRoot, true)
 	if err != nil {
 		t.Errorf("can't list key '%s', detail: '%s'", testRoot, err.Error())
 		return
@@ -185,12 +185,12 @@ func TestClient_List(t *testing.T) {
 		return
 	}
 
-	keys, err = c.List(testRoot+"xxx", true)
+	keys, err = c.list(testRoot+"xxx", true)
 	if err == nil {
 		t.Errorf("can't list key '%s', detail: '%v'", testRoot+"xxx", err)
 		return
 	}
-	keys, err = c.List(testRoot+"xxx", false)
+	keys, err = c.list(testRoot+"xxx", false)
 	if err != nil {
 		t.Errorf("expect no error if must is false")
 		return

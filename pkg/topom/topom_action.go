@@ -173,12 +173,13 @@ func (s *Topom) transitionSlotStateRaw(ctx *context, m *models.SlotMapping,
 		*m = om
 		log.Errorf("[transitionSlotStateRaw] slot-%d transition from %s to %s failed, err: %v", m.Id, &om, &nm, errors.Trace(err))
 		if strings.Contains(err.Error(), errMsgRollback) {
-			s.action.slotsProgress[m.Id] = models.NewSlotMigrationProgress("", "", err)
+			s.action.slotsProgress[m.Id] = models.NewSlotMigrationProgress("", "",
+				s.action.slotsProgress[m.Id].RollbackTimes+1, err)
 		} else {
-			s.action.slotsProgress[m.Id] = s.GetSlotMigrationProgress(m, err)
+			s.action.slotsProgress[m.Id] = s.GetSlotMigrationProgress(m, s.action.slotsProgress[m.Id].RollbackTimes, err)
 		}
 	} else {
-		s.action.slotsProgress[m.Id] = s.GetSlotMigrationProgress(m, nil)
+		s.action.slotsProgress[m.Id] = s.GetSlotMigrationProgress(m, s.action.slotsProgress[m.Id].RollbackTimes, nil)
 	}
 	return err
 }
@@ -224,7 +225,6 @@ func (s *Topom) rollbackStateToPreparing(ctx *context, m *models.SlotMapping, or
 		return errors.Errorf("slot-[%d] RollbackErr: '%v', RollbackReason '%v'", m.Id, updateErr, reason)
 	}
 	log.Warnf("[rollbackStateToPreparing] slot-[%d] %s due to error: '%v'", m.Id, errMsgRollback, reason)
-	m.Action.Info.RollbackTimes++
 	return errors.Errorf("slot-[%d] %s due to error: '%v'", m.Id, errMsgRollback, reason)
 }
 

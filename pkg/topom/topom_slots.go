@@ -672,7 +672,7 @@ func (s *Topom) preparingSlot(ctx *context, m *models.SlotMapping) (err error) {
 		return nil
 	}
 
-	if m.Action.Info.RollbackTimes >= MaxRollbackTimes {
+	if s.action.slotsProgress[m.Id].RollbackTimes >= MaxRollbackTimes {
 		log.Warnf("[preparingSlot] rollback too many times(>%d), delete slots of target group and retry", MaxRollbackTimes)
 
 		if err := s.cleanupSlotsOfGroup(ctx, m, m.Action.TargetId); err != nil {
@@ -681,7 +681,7 @@ func (s *Topom) preparingSlot(ctx *context, m *models.SlotMapping) (err error) {
 		}
 		defer func() {
 			if err == nil {
-				m.Action.Info.RollbackTimes = 0
+				s.action.slotsProgress[m.Id].RollbackTimes = 0
 			}
 		}()
 	}
