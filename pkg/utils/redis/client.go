@@ -346,7 +346,7 @@ func (c *Client) PkSlotsInfo() (map[int]pika.SlotInfo, error) {
 	return pika.ParseSlotsInfo(infoReplyStr)
 }
 
-func (c *Client) SlaveOf(masterAddr string, slot int, force bool) error {
+func (c *Client) SlaveOf(masterAddr string, slot int, force, resharding bool) error {
 	host, port, err := net.SplitHostPort(masterAddr)
 	if err != nil {
 		log.Warnf("[SlaveOf] split host %s err: '%v'", masterAddr, err)
@@ -354,11 +354,45 @@ func (c *Client) SlaveOf(masterAddr string, slot int, force bool) error {
 	}
 
 	args := []interface{}{"slotsslaveof", host, port, slot}
-	if force {
-		args = append(args, "force")
+	slaveOfOpt := getSlaveOfOpt(force, resharding)
+	if slaveOfOpt != "" {
+		args = append(args, slaveOfOpt)
 	}
-	_, err = c.Do("pkcluster", args...)
+	if _, err = c.Do("pkcluster", args...); err != nil {
+		log.Errorf("slot-[%02d] %s %s slaveof %s failed: '%v'", c.Addr, slaveOfOpt, masterAddr, err)
+	} else {
+		log.Warnf("slot-[%02d] %s %s slaveof %s succeeded", c.Addr, slaveOfOpt, masterAddr)
+	}
 	return err
+}
+
+func getSlaveOfOpt(force, resharding bool) string {
+	if force {
+		if resharding {
+			return "force_resharding"
+		}
+		return "force"
+	}
+	if resharding {
+		return "resharding"
+	}
+	return ""
+}
+
+func (c *Client) GetMaxSlotNum() (int, error) {
+	r, err := c.Do("CONFIG", "GET", "default-slot-num")
+	if err != nil {
+		return -1, errors.Trace(err)
+	}
+	p, err := redigo.Values(r, nil)
+	if err != nil || len(p) != 2 {
+		return -1, errors.Errorf("invalid response = %v", r)
+	}
+	v, err := redigo.Int(p[1], nil)
+	if err != nil {
+		return -1, errors.Errorf("invalid response = %v", r)
+	}
+	return v, nil
 }
 
 func (c *Client) AddSlot(slot int) error {

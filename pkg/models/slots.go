@@ -124,9 +124,11 @@ type SlotMapping struct {
 	GroupId int `json:"group_id"`
 
 	Action struct {
-		Index    int    `json:"index,omitempty"`
-		State    string `json:"state,omitempty"`
-		TargetId int    `json:"target_id,omitempty"`
+		Index            int    `json:"index,omitempty"`
+		State            string `json:"state,omitempty"`
+		TargetId         int    `json:"target_id,omitempty"`
+		Resharding       bool   `json:"resharding,omitempty"`
+		SourceMaxSlotNum int    `json:"source_max_slot_num,omitempty"`
 
 		Info struct {
 			SourceMaster         string                 `json:"source_master,omitempty"`
@@ -137,6 +139,14 @@ type SlotMapping struct {
 			TargetMasterSlotInfo *CachedSlotInfo        `json:"-"`
 		} `json:"info"`
 	} `json:"action"`
+	Stopped bool `json:"stopped,omitempty"`
+}
+
+func (m *SlotMapping) GetSourceMasterSlot() int {
+	if !m.Action.Resharding {
+		return m.Id
+	}
+	return m.Id % m.Action.SourceMaxSlotNum
 }
 
 func (m *SlotMapping) GetStateStart() time.Time {

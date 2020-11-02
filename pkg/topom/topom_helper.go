@@ -65,9 +65,9 @@ func (s *Topom) cleanSlot(addr string, slot int) error {
 	return err
 }
 
-func (s *Topom) slaveOfAsync(masterAddr, slaveAddr string, slot int, force bool) error {
+func (s *Topom) slaveOfAsync(masterAddr, slaveAddr string, slot int, force, resharding bool) error {
 	return s.withRedisClient(slaveAddr, func(client *redis.Client) error {
-		return client.SlaveOf(masterAddr, slot, force)
+		return client.SlaveOf(masterAddr, slot, force, resharding)
 	})
 }
 
@@ -78,14 +78,18 @@ func (s *Topom) addSlotIfNotExistsSM(m *models.SlotMapping, addr string) error {
 }
 
 // Delete slot if exists
-func (s *Topom) cleanSlotSM(m *models.SlotMapping, addr string) error {
-	err := s.cleanSlot(addr, m.Id)
+func (s *Topom) cleanSlotSM(m *models.SlotMapping, groupID int, addr string) error {
+	sid := m.Id
+	if m.Action.Resharding && groupID == m.GroupId {
+		sid %= m.Action.SourceMaxSlotNum
+	}
+	err := s.cleanSlot(addr, sid)
 	m.ClearCachedSlotInfo(addr)
 	return err
 }
 
-func (s *Topom) slaveOfAsyncSM(m *models.SlotMapping, masterAddr, slaveAddr string, force bool) error {
-	err := s.slaveOfAsync(masterAddr, slaveAddr, m.Id, force)
+func (s *Topom) slaveOfAsyncSM(m *models.SlotMapping, masterAddr, slaveAddr string, force, resharding bool) error {
+	err := s.slaveOfAsync(masterAddr, slaveAddr, m.Id, force, resharding)
 	m.ClearCachedSlotInfo(masterAddr, slaveAddr)
 	return err
 }
@@ -99,11 +103,11 @@ func (s *Topom) cleanupSlotsOfGroup(ctx *context, m *models.SlotMapping, groupID
 	}
 
 	for _, slaveAddr := range slaveAddrs {
-		if err := s.cleanSlotSM(m, slaveAddr); err != nil {
+		if err := s.cleanSlotSM(m, groupID, slaveAddr); err != nil {
 			log.Errorf("[cleanupSlotsOfGroup] slot-[%d] clean slot of slave %s failed: %v ", m.Id, slaveAddr, err)
 		}
 	}
-	err := s.cleanSlotSM(m, masterAddr)
+	err := s.cleanSlotSM(m, groupID, masterAddr)
 	if err != nil {
 		log.Errorf("[cleanupSlotsOfGroup] slot-[%d] clean slot of master %s failed: %v ", m.Id, masterAddr, err)
 	}
@@ -120,7 +124,7 @@ func (s *Topom) unlinkSlaves(m *models.SlotMapping, masterAddr string) error {
 	}
 
 	for _, slaveReplInfo := range masterSlotInfo.SlaveReplInfos {
-		if err := s.detachSlotAsyncSM(m, masterAddr, slaveReplInfo.Addr); err != nil {
+		if err := s.detachSlotAsyncSMRaw(m, masterSlotInfo, masterAddr, slaveReplInfo.Addr); err != nil {
 			log.Errorf("[unlinkSlaves] slot-[%d] detach source slave slot fail, slave address:%v: '%v'", m.Id, slaveReplInfo.Addr, err)
 		}
 	}
@@ -142,7 +146,11 @@ func (s *Topom) unlinkSlaves(m *models.SlotMapping, masterAddr string) error {
 }
 
 func (s *Topom) detachSlotAsyncSM(m *models.SlotMapping, masterAddr, slaveAddr string) error {
-	err := s.slaveOfAsync("no:one", slaveAddr, m.Id, false)
+	return s.detachSlotAsyncSMRaw(m, pika.SlotInfo{Slot: m.Id}, masterAddr, slaveAddr)
+}
+
+func (s *Topom) detachSlotAsyncSMRaw(m *models.SlotMapping, info pika.SlotInfo, masterAddr, slaveAddr string) error {
+	err := s.slaveOfAsync("no:one", slaveAddr, info.Slot, false, false)
 	m.ClearCachedSlotInfo(masterAddr, slaveAddr)
 	return err
 }
@@ -161,13 +169,21 @@ func (s *Topom) detachSlotSM(m *models.SlotMapping, masterAddr, slaveAddr string
 	})
 }
 
+func (s *Topom) createReplLink(m *models.SlotMapping, masterAddress, slaveAddress string) error {
+	return s.backupSlotAsyncRaw(m, masterAddress, slaveAddress, false, m.Action.Resharding)
+}
+
 func (s *Topom) backupSlotAsync(m *models.SlotMapping, masterAddress, slaveAddress string) error {
+	return s.backupSlotAsyncRaw(m, masterAddress, slaveAddress, false, false)
+}
+
+func (s *Topom) backupSlotAsyncRaw(m *models.SlotMapping, masterAddress, slaveAddress string, force, resharding bool) error {
 	if err := s.addSlotIfNotExistsSM(m, slaveAddress); err != nil {
 		log.Errorf("[backupSlotAsync] slot-[%d] failed to add slot on target %s, err: '%v'", m.Id, slaveAddress, err)
 		return err
 	}
 
-	if err := s.slaveOfAsyncSM(m, masterAddress, slaveAddress, false); err != nil {
+	if err := s.slaveOfAsyncSM(m, masterAddress, slaveAddress, force, resharding); err != nil {
 		log.Errorf("[backupSlotAsync] slot-[%d] failed to slaveof %s for target %s, err: '%v'", m.Id, masterAddress, slaveAddress, err)
 		return err
 	}
@@ -266,7 +282,7 @@ func (s *Topom) getMasterSlotInfo(m *models.SlotMapping, masterAddr string) (pik
 
 func (s *Topom) getSourceMasterSlotInfo(m *models.SlotMapping) (pika.SlotInfo, error) {
 	if m.Action.Info.SourceMasterSlotInfo == nil || m.Action.Info.SourceMasterSlotInfo.IsExpired() {
-		sourceMasterSlotInfo, err := s.getPikaSlotInfo(m.Action.Info.SourceMaster, m.Id)
+		sourceMasterSlotInfo, err := s.getPikaSlotInfo(m.Action.Info.SourceMaster, m.GetSourceMasterSlot())
 		if err != nil {
 			return pika.SlotInfo{}, errors.Errorf("slot-[%d], can't find source master %s slot info: '%v'", m.Id, m.Action.Info.SourceMaster, err)
 		}
