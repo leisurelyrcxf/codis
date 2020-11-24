@@ -826,19 +826,20 @@ func (s *Topom) preparingSlot(ctx *context, m *models.SlotMapping) (err error) {
 		return errors.Errorf("slot-[%d] preparing slot, Target group-[%d] is promoting", m.Id, m.Action.TargetId)
 	}
 
-	sourceAddress := ctx.getGroupMaster(m.GroupId)
-	targetAddress := ctx.getGroupMaster(m.Action.TargetId)
-	m.Action.Info.SourceMaster = sourceAddress
-	m.Action.Info.TargetMaster = targetAddress
+	sourceMaster := ctx.getGroupMaster(m.GroupId)
+	targetMaster := ctx.getGroupMaster(m.Action.TargetId)
+	m.Action.Info.SourceMaster = sourceMaster
+	m.Action.Info.TargetMaster = targetMaster
 
-	if sourceAddress == "" || targetAddress == "" {
+	if sourceMaster == "" || targetMaster == "" {
 		return nil
 	}
 
 	if s.action.slotsProgress[m.Id].RollbackTimes >= MaxRollbackTimes {
 		log.Warnf("[preparingSlot] rollback too many times(>%d), delete slots of target group and retry", MaxRollbackTimes)
 
-		if err := s.cleanupSlotsOfGroup(ctx, m, m.Action.TargetId); err != nil {
+		cleanupAddrs := ctx.getGroupSlavesMaster(m.Action.TargetId)
+		if err := s.cleanupServersSlot(m, cleanupAddrs, m.Id, m.Action.Info.SourceMaster, cleanupAddrs); err != nil {
 			log.Errorf("[preparingSlot] failed to cleanup slots of target group %d: '%s'", m.Action.TargetId, err)
 			return err
 		}
@@ -849,18 +850,9 @@ func (s *Topom) preparingSlot(ctx *context, m *models.SlotMapping) (err error) {
 		}()
 	}
 
-	if err := s.addSlotIfNotExistsSM(m, targetAddress); err != nil {
-		log.Errorf("[preparingSlot] slot-[%d] failed to add slot on target %s, err: '%v'", m.Id, targetAddress, err)
+	if err := s.createReplLink(ctx, m); err != nil {
+		log.Errorf("[preparingSlot] slot-[%d] failed to create repl link of target group, err: '%v'", m.Id, err)
 		return err
-	}
-
-	if err := s.assureTargetSlavesLinked(ctx, m); err != nil {
-		log.Errorf("[preparingSlot] slot-[%d] failed to backup target group, err: '%v'", m.Id, err)
-		return err
-	}
-
-	if err = s.createReplLink(m, sourceAddress, targetAddress); err != nil {
-		log.Errorf("[preparingSlot] slot-[%d] failed to create repl link target_master(%s)->source_master(%s), err: '%v'", m.Id, targetAddress, sourceAddress, err)
 	}
 	return err
 }
@@ -868,13 +860,13 @@ func (s *Topom) preparingSlot(ctx *context, m *models.SlotMapping) (err error) {
 func (s *Topom) watchSlot(ctx *context, m *models.SlotMapping) error {
 	gap := s.GetSlotActionGap()
 	return s.compareSlot(ctx, m, gap, func(string, string) error {
-		return s.backedUpSlot(ctx, m, gap)
+		return s.backedUpSlot(ctx, m, gap, false)
 	})
 }
 
 func (s *Topom) preparedSlot(ctx *context, m *models.SlotMapping) error {
 	return s.compareSlot(ctx, m, 0, func(sourceMaster, targetMaster string) error {
-		return s.detachSlotSM(m, sourceMaster, targetMaster)
+		return s.detachSlot(m, sourceMaster, targetMaster)
 	})
 }
 
@@ -904,16 +896,16 @@ func (s *Topom) cleanupSlot(ctx *context, m *models.SlotMapping) error {
 
 	if m.Action.Resharding {
 		for _, am := range ctx.slots {
-			if am.Id != m.Id &&
-				am.GroupId == m.GroupId &&
-				am.Id%m.Action.SourceMaxSlotNum == m.Id%m.Action.SourceMaxSlotNum {
-				log.Infof("[cleanupSlot] skip cleanup, another slot %d exists for same group", am.Id, am.GroupId)
+			if am.Action.State != models.ActionNothing && am.Id != m.Id &&
+				am.GroupId == m.GroupId && am.GetSourceSlot() == m.GetSourceSlot() {
+				log.Infof("[cleanupSlot] skip cleanup slot %d, another slot %d exists for same source slot %d", m.Id, am.Id, m.GetSourceSlot())
 				return nil
 			}
 		}
 	}
 
-	if err := s.cleanupSlotsOfGroup(ctx, m, m.GroupId); err != nil {
+	sourceMaster, sourceSlaves := ctx.getGroupMaster(m.GroupId), ctx.getGroupSlaves(m.GroupId)
+	if err := s.cleanupServersSlot(m, append(sourceSlaves, sourceMaster), m.GetSourceSlot(), sourceMaster, sourceSlaves); err != nil {
 		log.Errorf("[cleanupSlot] failed to cleanup slots of source group %d: '%s'", m.GroupId, err)
 	}
 	return nil

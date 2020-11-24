@@ -522,8 +522,12 @@ func (s *Topom) SlaveOfMaster(addr string, slots []int, force bool) error {
 		return err
 	}
 	for _, slot := range slots {
-		if _, err := ctx.getSlotMapping(slot); err != nil {
+		sm, err := ctx.getSlotMapping(slot)
+		if err != nil {
 			return err
+		}
+		if sm.Action.State != models.ActionNothing {
+			return errors.Errorf("slot %d is migrating", slot)
 		}
 	}
 

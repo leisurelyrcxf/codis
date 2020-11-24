@@ -13,10 +13,12 @@ const ErrMsgLagNotMatch = "lag not match"
 var (
 	ErrSlaveNotFound = errors.New("slave not found")
 
-	InvalidSlaveReplInfo = SlaveReplInfo{
-		Addr:   "",
-		Lag:    math.MaxUint64,
-		Status: SlaveStatusUnknown,
+	InvalidSlaveReplInfo = func(addr string) SlaveReplInfo {
+		return SlaveReplInfo{
+			Addr:   addr,
+			Lag:    math.MaxUint64,
+			Status: SlaveStatusUnknown,
+		}
 	}
 )
 
@@ -108,7 +110,7 @@ func (i *SlotInfo) FindSlaveReplInfo(slaveAddr string) (SlaveReplInfo, error) {
 			return slaveReplInfo, nil
 		}
 	}
-	return InvalidSlaveReplInfo, ErrSlaveNotFound
+	return InvalidSlaveReplInfo(slaveAddr), ErrSlaveNotFound
 }
 
 func (i SlotInfo) IsLinked(slaveAddr string) bool {
