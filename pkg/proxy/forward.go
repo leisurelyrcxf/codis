@@ -221,14 +221,11 @@ func (d *forwardHelper) forward2(s *Slot, r *Request, excludeAddr string) *Backe
 			for range group {
 				i = (i + 1) % uint(len(group))
 				if bc := group[i].BackendConn(database, seed, false); bc != nil && bc.addr != excludeAddr {
-					if r.Retryer == nil {
-						bcAddr := bc.addr
-						r.Retryer = func(r *Request) *BackendConn {
-							return d.forward2(s, r, bcAddr)
-						}
-					} else {
-						// Retry at most once
-						r.Retryer = nil
+					bcAddr := bc.addr
+					r.Retryer = func(r *Request) *BackendConn {
+						bc := d.forward2(s, r, bcAddr)
+						r.Retryer = nil // Retry at most once
+						return bc
 					}
 					return bc
 				}
