@@ -359,9 +359,9 @@ func (c *Client) SlaveOf(masterAddr string, slot int, force, resharding bool) er
 		args = append(args, slaveOfOpt)
 	}
 	if _, err = c.Do("pkcluster", args...); err != nil {
-		log.Errorf("slot-[%02d] %s %s slaveof %s failed: '%v'", c.Addr, slaveOfOpt, masterAddr, err)
+		log.Errorf("slot-[%02d] %s %s slaveof %s failed: '%v'", slot, c.Addr, slaveOfOpt, masterAddr, err)
 	} else {
-		log.Warnf("slot-[%02d] %s %s slaveof %s succeeded", c.Addr, slaveOfOpt, masterAddr)
+		log.Warnf("slot-[%02d] %s %s slaveof %s succeeded", slot, c.Addr, slaveOfOpt, masterAddr)
 	}
 	return err
 }

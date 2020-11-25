@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CodisLabs/codis/pkg/utils"
+
 	"github.com/CodisLabs/codis/pkg/utils/pika"
 
 	"github.com/CodisLabs/codis/pkg/utils/errors"
@@ -176,10 +178,10 @@ func (s *Topom) transitionSlotStateRaw(ctx *context, m *models.SlotMapping,
 			s.action.slotsProgress[m.Id] = models.NewSlotMigrationProgress("", "",
 				s.action.slotsProgress[m.Id].RollbackTimes+1, err)
 		} else {
-			s.action.slotsProgress[m.Id] = s.GetSlotMigrationProgress(m, s.action.slotsProgress[m.Id].RollbackTimes, err)
+			s.action.slotsProgress[m.Id] = s.GetSlotMigrationProgress(ctx, m, s.action.slotsProgress[m.Id].RollbackTimes, err)
 		}
 	} else {
-		s.action.slotsProgress[m.Id] = s.GetSlotMigrationProgress(m, s.action.slotsProgress[m.Id].RollbackTimes, nil)
+		s.action.slotsProgress[m.Id] = s.GetSlotMigrationProgress(ctx, m, s.action.slotsProgress[m.Id].RollbackTimes, nil)
 	}
 	return err
 }
@@ -187,8 +189,6 @@ func (s *Topom) transitionSlotStateRaw(ctx *context, m *models.SlotMapping,
 func (s *Topom) transitionSlotStateInternal(ctx *context, m *models.SlotMapping,
 	update func(m *models.SlotMapping),
 	action func(ctx *context, m *models.SlotMapping) error) (err error) {
-	m.Action.Info.SourceMasterSlotInfo = nil
-	m.Action.Info.TargetMasterSlotInfo = nil
 
 	original := *m
 	for _, prerequisite := range s.actionPrerequisites() {
@@ -377,7 +377,7 @@ func (s *Topom) prerequisiteAssureTargetSlavesLinked(ctx *context, m *models.Slo
 		return nil, false
 	}
 
-	if err := s.assureTargetSlavesLinked(ctx, m); err != nil {
+	if err := s.assureTargetSlavesLinked(ctx, m, false); err != nil {
 		return err, time.Since(m.GetStateStart()) > s.GetSlotActionRollbackWaitPeriod() // rollback if target master down
 	}
 	return nil, false
@@ -391,11 +391,13 @@ func (s *Topom) prerequisiteCleanup(ctx *context, m *models.SlotMapping) (_ erro
 		return nil, false
 	}
 
-	if err := s.assureTargetSlavesLinked(ctx, m); err != nil {
+	if err := s.assureTargetSlavesLinked(ctx, m, true); err != nil {
 		return err, time.Since(m.GetStateStart()) > s.GetSlotActionRollbackWaitPeriod() // rollback if target master down
 	}
-	if err := s.backedUpSlot(ctx, m, 2*s.GetSlotActionGap()); err != nil {
+	if err := utils.WithRetry(100*time.Millisecond, 2*time.Second, func() error {
+		return s.backedUpSlot(ctx, m, s.GetSlotActionGap(), true)
+	}); err != nil {
 		return err, time.Since(m.GetStateStart()) > s.GetSlotActionRollbackWaitPeriod() // rollback if gap violated, otherwise wait time is uncertain.
 	}
-	return s.backedUpSlot(ctx, m, 0), false
+	return s.backedUpSlot(ctx, m, 0, true), false
 }

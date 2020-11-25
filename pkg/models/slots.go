@@ -9,8 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/pika"
+
+	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/rpc"
 	"github.com/CodisLabs/codis/pkg/utils/trace"
 )
@@ -47,34 +48,62 @@ func ParseForwardMethod(s string) (int, bool) {
 	}
 }
 
+// SlaveReplInfo
+type SlaveReplProgress struct {
+	Addr     string
+	Lag      uint64
+	Status   pika.SlaveStatus
+	Progress string
+}
+
+func NewSlaveReplProgress(info pika.SlaveReplInfo, err error) SlaveReplProgress {
+	progress := "migrating"
+	if err := info.GapReached(0); err == nil {
+		progress = "completed"
+	}
+	if err != nil {
+		progress = err.Error()
+	}
+	return SlaveReplProgress{
+		Addr:     info.Addr,
+		Lag:      info.Lag,
+		Status:   info.Status,
+		Progress: progress,
+	}
+}
+
+func (p *SlaveReplProgress) IsEmpty() bool {
+	return p.Addr == ""
+}
+
 type SlotMigrationProgress struct {
 	Err *struct {
 		Cause string      `json:"cause"`
 		Stack trace.Stack `json:"Stack,omitempty"`
 	} `json:"err,omitempty"`
 	Main struct {
-		SourceMaster string              `json:"source_master"`
-		TargetMaster *pika.SlaveReplInfo `json:"target_master"`
+		SourceMaster string            `json:"source_master"`
+		TargetMaster SlaveReplProgress `json:"target_master"`
 	} `json:"main"`
 	Backup struct {
-		TargetMaster string               `json:"target_master"`
-		TargetSlaves []pika.SlaveReplInfo `json:"target_slaves"`
+		TargetSlavesMaster string              `json:"target_slaves_master"`
+		TargetSlaves       []SlaveReplProgress `json:"target_slaves"`
 	} `json:"backup"`
 	RollbackTimes int `json:"rollback_times"`
 }
 
-func NewSlotMigrationProgress(sourceMaster, targetMaster string, rollbackTimes int, err error) SlotMigrationProgress {
+func NewSlotMigrationProgress(sourceMaster, targetSlavesMaster string, rollbackTimes int, err error) SlotMigrationProgress {
 	p := SlotMigrationProgress{}
 	p.Main.SourceMaster = sourceMaster
-	p.Backup.TargetMaster = targetMaster
+	p.Backup.TargetSlavesMaster = targetSlavesMaster
 	p.RollbackTimes = rollbackTimes
 	p.Err = convertToSlotMigrationProgressErr(err)
 	return p
 }
 
 func (p SlotMigrationProgress) IsEmpty() bool {
-	return p.Main.SourceMaster == "" && p.Main.TargetMaster == nil &&
-		p.Backup.TargetMaster == "" && len(p.Backup.TargetSlaves) == 0 &&
+	return p.Main.SourceMaster == "" && p.Main.TargetMaster.IsEmpty() &&
+		p.Backup.TargetSlavesMaster == "" && len(p.Backup.TargetSlaves) == 0 &&
 		p.Err == nil && p.RollbackTimes == 0
 }
 
@@ -103,22 +132,6 @@ func convertToSlotMigrationProgressErr(err error) *struct {
 	return ret
 }
 
-type CachedSlotInfo struct {
-	pika.SlotInfo
-	expire time.Time
-}
-
-func NewCachedSlotInfo(slotInfo pika.SlotInfo, ttl time.Duration) *CachedSlotInfo {
-	return &CachedSlotInfo{
-		SlotInfo: slotInfo,
-		expire:   time.Now().Add(ttl),
-	}
-}
-
-func (c *CachedSlotInfo) IsExpired() bool {
-	return time.Since(c.expire) > 0
-}
-
 type SlotMapping struct {
 	Id      int `json:"id"`
 	GroupId int `json:"group_id"`
@@ -131,18 +144,16 @@ type SlotMapping struct {
 		SourceMaxSlotNum int    `json:"source_max_slot_num,omitempty"`
 
 		Info struct {
-			SourceMaster         string                 `json:"source_master,omitempty"`
-			TargetMaster         string                 `json:"target_master,omitempty"`
-			StateStart           *time.Time             `json:"state_start,omitempty"`
-			Progress             *SlotMigrationProgress `json:"progress,omitempty"`
-			SourceMasterSlotInfo *CachedSlotInfo        `json:"-"`
-			TargetMasterSlotInfo *CachedSlotInfo        `json:"-"`
+			SourceMaster string                 `json:"source_master,omitempty"`
+			TargetMaster string                 `json:"target_master,omitempty"`
+			StateStart   *time.Time             `json:"state_start,omitempty"`
+			Progress     *SlotMigrationProgress `json:"progress,omitempty"`
 		} `json:"info"`
 	} `json:"action"`
 	Stopped bool `json:"stopped,omitempty"`
 }
 
-func (m *SlotMapping) GetSourceMasterSlot() int {
+func (m *SlotMapping) GetSourceSlot() int {
 	if !m.Action.Resharding {
 		return m.Id
 	}
@@ -184,12 +195,10 @@ func (m *SlotMapping) ClearAction() *SlotMapping {
 func (m *SlotMapping) ClearActionInfo() *SlotMapping {
 	// Write like this so dev will never forget to clear new members
 	m.Action.Info = struct {
-		SourceMaster         string                 `json:"source_master,omitempty"`
-		TargetMaster         string                 `json:"target_master,omitempty"`
-		StateStart           *time.Time             `json:"state_start,omitempty"`
-		Progress             *SlotMigrationProgress `json:"progress,omitempty"`
-		SourceMasterSlotInfo *CachedSlotInfo        `json:"-"`
-		TargetMasterSlotInfo *CachedSlotInfo        `json:"-"`
+		SourceMaster string                 `json:"source_master,omitempty"`
+		TargetMaster string                 `json:"target_master,omitempty"`
+		StateStart   *time.Time             `json:"state_start,omitempty"`
+		Progress     *SlotMigrationProgress `json:"progress,omitempty"`
 	}{}
 	return m
 }
@@ -216,14 +225,4 @@ func (m *SlotMapping) copyAndClearProgress() *SlotMapping {
 	tm := *m
 	tm.Action.Info.Progress = nil
 	return &tm
-}
-
-func (m *SlotMapping) ClearCachedSlotInfo(masterAddrs ...string) {
-	for _, addr := range masterAddrs {
-		if addr == m.Action.Info.SourceMaster {
-			m.Action.Info.SourceMasterSlotInfo = nil
-		} else if addr == m.Action.Info.TargetMaster {
-			m.Action.Info.TargetMasterSlotInfo = nil
-		}
-	}
 }

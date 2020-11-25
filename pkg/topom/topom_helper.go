@@ -52,7 +52,7 @@ func (s *Topom) addSlotIfNotExists(addr string, slot int) error {
 }
 
 // Delete slot if exists
-func (s *Topom) cleanSlot(addr string, slot int) error {
+func (s *Topom) cleanSlotIfExists(addr string, slot int) error {
 	err := s.withRedisClient(addr, func(client *redis.Client) error {
 		return client.DeleteSlot(slot)
 	})
@@ -71,143 +71,126 @@ func (s *Topom) slaveOfAsync(masterAddr, slaveAddr string, slot int, force, resh
 	})
 }
 
-func (s *Topom) addSlotIfNotExistsSM(m *models.SlotMapping, addr string) error {
-	err := s.addSlotIfNotExists(addr, m.Id)
-	m.ClearCachedSlotInfo(addr)
-	return err
-}
+// --------------------------------------------------- sep  -------------------------------- below are context-dependent functions
 
-// Delete slot if exists
-func (s *Topom) cleanSlotSM(m *models.SlotMapping, groupID int, addr string) error {
-	sid := m.Id
-	if m.Action.Resharding && groupID == m.GroupId {
-		sid %= m.Action.SourceMaxSlotNum
-	}
-	err := s.cleanSlot(addr, sid)
-	m.ClearCachedSlotInfo(addr)
-	return err
-}
-
-func (s *Topom) slaveOfAsyncSM(m *models.SlotMapping, masterAddr, slaveAddr string, force, resharding bool) error {
-	err := s.slaveOfAsync(masterAddr, slaveAddr, m.Id, force, resharding)
-	m.ClearCachedSlotInfo(masterAddr, slaveAddr)
-	return err
-}
-
-func (s *Topom) cleanupSlotsOfGroup(ctx *context, m *models.SlotMapping, groupID int) error {
-	masterAddr, slaveAddrs := ctx.getGroupMaster(groupID), ctx.getGroupSlaves(groupID)
-
-	if err := s.unlinkSlaves(m, masterAddr); err != nil {
-		log.Errorf("[cleanupSlotsOfGroup] failed to unlink slaves of target master '%s': '%s'", masterAddr, err)
+func (s *Topom) cleanupServersSlot(m *models.SlotMapping, cleanupAddrs []string, cleanupSlot int, masterAddr string, slaveAddrs []string) error {
+	if err := s.unlinkSlaves(m, masterAddr, slaveAddrs); err != nil {
+		log.Errorf("[cleanupServersSlot] failed to unlink slaves of target master '%s': '%s'", masterAddr, err)
 		return err
 	}
 
-	for _, slaveAddr := range slaveAddrs {
-		if err := s.cleanSlotSM(m, groupID, slaveAddr); err != nil {
-			log.Errorf("[cleanupSlotsOfGroup] slot-[%d] clean slot of slave %s failed: %v ", m.Id, slaveAddr, err)
+	var err error
+	for _, cleanupAddr := range cleanupAddrs {
+		if cleanErr := s.cleanSlotIfExists(cleanupAddr, cleanupSlot); cleanErr != nil {
+			log.Errorf("[cleanupServersSlot] slot-[%d] clean slot of slave %s failed: %v ", m.Id, cleanupAddr, cleanErr)
+			err = cleanErr
 		}
 	}
-	err := s.cleanSlotSM(m, groupID, masterAddr)
-	if err != nil {
-		log.Errorf("[cleanupSlotsOfGroup] slot-[%d] clean slot of master %s failed: %v ", m.Id, masterAddr, err)
-	}
 	return err
 }
 
-func (s *Topom) unlinkSlaves(m *models.SlotMapping, masterAddr string) error {
-	masterSlotInfo, err := s.getMasterSlotInfo(m, masterAddr)
-	if err != nil {
-		return err
-	}
-	if len(masterSlotInfo.SlaveReplInfos) == 0 {
-		return nil
-	}
-
-	for _, slaveReplInfo := range masterSlotInfo.SlaveReplInfos {
-		if err := s.detachSlotAsyncSM(m, masterSlotInfo, masterAddr, slaveReplInfo.Addr); err != nil {
-			log.Errorf("[unlinkSlaves] slot-[%d] detach source slave slot fail, slave address:%v: '%v'", m.Id, slaveReplInfo.Addr, err)
+func (s *Topom) unlinkSlaves(m *models.SlotMapping, masterAddr string, slaveAddrs []string) (err error) {
+	for _, slaveAddr := range slaveAddrs {
+		if err = s.detachSlotAsync(slaveAddr, m.Id); err != nil {
+			return err
 		}
 	}
 	if err = utils.WithRetry(time.Millisecond*100, time.Second*2, func() error {
 		masterSlotInfo, err := s.getMasterSlotInfo(m, masterAddr)
 		if err != nil {
-			m.ClearCachedSlotInfo(masterAddr)
 			return err
 		}
-		if len(masterSlotInfo.SlaveReplInfos) == 0 {
-			return nil
+		for _, slaveAddr := range slaveAddrs {
+			if _, err := masterSlotInfo.FindSlaveReplInfo(slaveAddr); err != pika.ErrSlaveNotFound {
+				return fmt.Errorf("slot-[%d] detach failed: slave %s found on master %s", m.Id, slaveAddr, masterAddr)
+			}
 		}
-		m.ClearCachedSlotInfo(masterAddr)
-		return errors.Errorf("slot-[%d] slaves of master %s not all unlinked", m.Id, masterAddr)
+		return nil
 	}); err != nil {
 		log.Errorf("[unlinkSlaves] slot-[%d] detach failed: '%v'", m.Id, err)
 	}
 	return err
 }
-func (s *Topom) detachSlotAsyncSM(m *models.SlotMapping, info pika.SlotInfo, masterAddr, slaveAddr string) error {
-	err := s.slaveOfAsync("no:one", slaveAddr, info.Slot, false, false)
-	m.ClearCachedSlotInfo(masterAddr, slaveAddr)
-	return err
+
+func (s *Topom) detachSlotAsync(slaveAddr string, slot int) error {
+	return s.slaveOfAsync("no:one", slaveAddr, slot, false, false)
 }
 
-func (s *Topom) detachSlotSM(m *models.SlotMapping, masterAddr, slaveAddr string) error {
-	if err := s.detachSlotAsyncSM(m, pika.SlotInfo{Slot: m.Id}, masterAddr, slaveAddr); err != nil {
+func (s *Topom) detachSlot(m *models.SlotMapping, masterAddr, slaveAddr string) error {
+	if err := s.detachSlotAsync(slaveAddr, m.Id); err != nil {
 		return err
 	}
 
 	return utils.WithRetry(time.Millisecond*100, time.Second*2, func() error {
 		if _, err := s.getSlaveReplInfo(m, masterAddr, slaveAddr); err != pika.ErrSlaveNotFound {
-			m.ClearCachedSlotInfo(masterAddr)
 			return fmt.Errorf("slot-[%d] detach failed: slave %s found on master %s", m.Id, slaveAddr, masterAddr)
 		}
 		return nil
 	})
 }
 
-func (s *Topom) createReplLink(m *models.SlotMapping, masterAddress, slaveAddress string) error {
-	return s.backupSlotAsyncRaw(m, masterAddress, slaveAddress, m.Action.Resharding)
+func (s *Topom) createReplLink(ctx *context, m *models.SlotMapping) error {
+	return s.linkSlaves(m, ctx.getGroupSlavesMaster(m.Action.TargetId), false)
 }
 
-func (s *Topom) backupSlotAsync(m *models.SlotMapping, masterAddress, slaveAddress string) error {
-	return s.backupSlotAsyncRaw(m, masterAddress, slaveAddress, false)
+func (s *Topom) assureTargetSlavesLinked(ctx *context, m *models.SlotMapping, targetMasterDetached bool) error {
+	return s.linkSlaves(m, ctx.getGroupSlaves(m.Action.TargetId), targetMasterDetached)
 }
 
-func (s *Topom) backupSlotAsyncRaw(m *models.SlotMapping, masterAddress, slaveAddress string, resharding bool) error {
-	if err := s.addSlotIfNotExistsSM(m, slaveAddress); err != nil {
-		log.Errorf("[backupSlotAsync] slot-[%d] failed to add slot on target %s, err: '%v'", m.Id, slaveAddress, err)
-		return err
+func (s *Topom) linkSlaves(m *models.SlotMapping, slaveAddrs []string, targetMasterDetached bool) error {
+	var (
+		masterAddr string
+		masterDesc string
+	)
+	if targetMasterDetached {
+		masterAddr = m.Action.Info.TargetMaster
+		masterDesc = "target"
+	} else {
+		masterAddr = m.Action.Info.SourceMaster
+		masterDesc = "source"
 	}
 
-	if err := s.slaveOfAsyncSM(m, masterAddress, slaveAddress, false, resharding); err != nil {
-		log.Errorf("[backupSlotAsync] slot-[%d] failed to slaveof %s for target %s, err: '%v'", m.Id, masterAddress, slaveAddress, err)
-		return err
-	}
-
-	return nil
-}
-
-func (s *Topom) assureTargetSlavesLinked(ctx *context, m *models.SlotMapping) error {
-	targetMasterSlotInfo, err := s.getTargetMasterSlotInfo(m)
+	masterSlotInfo, err := s.getMasterSlotInfo(m, masterAddr)
 	if err != nil {
 		return err
 	}
 
-	targetMasterAddr := m.Action.Info.TargetMaster
-	targetSlaveAddrs := ctx.getGroupSlaves(m.Action.TargetId)
-	for _, targetSlaveAddr := range targetSlaveAddrs {
-		if _, err := targetMasterSlotInfo.FindSlaveReplInfo(targetSlaveAddr); err != nil {
-			if err := s.backupSlotAsync(m, targetMasterAddr, targetSlaveAddr); err != nil { // pika support linked replication
-				log.Errorf("[assureTargetSlavesLinked] slot-[%d] backup target slaves slot fail, target master:%v, target slave: %v, err: %v ", m.Id, targetMasterAddr, targetSlaveAddr, err)
-			} else {
-				log.Infof("[assureTargetSlavesLinked] slot-[%d] backup target slaves succeeded, target_slave(%s)->target_master(%s)", m.Id, targetSlaveAddr, targetMasterAddr)
+	for _, slaveAddr := range slaveAddrs {
+		if _, err := masterSlotInfo.FindSlaveReplInfo(slaveAddr); err == nil {
+			continue // already linked
+		}
+
+		if err := func(slaveAddr string) error {
+			if err := s.addSlotIfNotExists(slaveAddr, m.Id); err != nil {
+				return errors.Errorf("add slot failed: '%v'", err)
 			}
+			if err := s.slaveOfAsync(masterAddr, slaveAddr, m.Id, false, m.Action.Resharding && masterAddr == m.Action.Info.SourceMaster); err != nil {
+				return errors.Errorf("slaveof failed: '%v'", err)
+			}
+			return nil
+		}(slaveAddr); err != nil {
+			log.Errorf("[assureTargetSlavesLinked] slot-[%d] backup target slaves slot fail, target_slave(%s)->%s_master(%s), err: %v ", m.Id, slaveAddr, masterDesc, masterAddr, err)
+		} else {
+			log.Infof("[assureTargetSlavesLinked] slot-[%d] backup target slaves succeeded, target_slave(%s)->%s_master(%s)", m.Id, slaveAddr, masterDesc, masterAddr)
 		}
 	}
 	return nil
 }
 
-func (s *Topom) backedUpSlot(ctx *context, m *models.SlotMapping, gap uint64) error {
-	targetMasterSlotInfo, err := s.getTargetMasterSlotInfo(m)
+func (s *Topom) backedUpSlot(ctx *context, m *models.SlotMapping, gap uint64, targetMasterDetached bool) error {
+	var (
+		masterAddr string
+		masterDesc string
+	)
+	if targetMasterDetached {
+		masterAddr = m.Action.Info.TargetMaster
+		masterDesc = "target"
+	} else {
+		masterAddr = m.Action.Info.SourceMaster
+		masterDesc = "source"
+	}
+
+	masterSlotInfo, err := s.getMasterSlotInfo(m, masterAddr)
 	if err != nil {
 		return err
 	}
@@ -217,42 +200,63 @@ func (s *Topom) backedUpSlot(ctx *context, m *models.SlotMapping, gap uint64) er
 		return nil
 	}
 
-	if len(targetMasterSlotInfo.SlaveReplInfos) == 0 {
-		return errors.Errorf("slot-[%d] no linked slave exists on target master %s", m.Id, m.Action.Info.TargetMaster)
+	if len(masterSlotInfo.SlaveReplInfos) == 0 {
+		return errors.Errorf("slot-[%d] no linked slave exists on %s master %s", m.Id, masterDesc, masterAddr)
 	}
 
-	if len(targetMasterSlotInfo.SyncedSlaves()) == 0 {
-		return errors.Errorf("slot-[%d] no synced slaves exists on target master %s", m.Id, m.Action.Info.TargetMaster)
+	if len(masterSlotInfo.SyncedSlaves()) == 0 {
+		return errors.Errorf("slot-[%d] no synced slaves exists on %s master %s", m.Id, masterDesc, masterAddr)
 	}
 
 	var errs []error
 	for _, targetSlaveAddr := range targetSlaveAddrs {
-		slaveReplInfo, err := targetMasterSlotInfo.FindSlaveReplInfo(targetSlaveAddr)
-		if err != nil {
+		if err := func(slaveAddr string) error {
+			slaveReplInfo, err := masterSlotInfo.FindSlaveReplInfo(slaveAddr)
+			if err != nil {
+				return err
+			}
+			return slaveReplInfo.GapReached(gap)
+		}(targetSlaveAddr); err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		if err = slaveReplInfo.GapReached(gap); err == nil {
-			return nil // at least one is enough
-		}
-		errs = append(errs, err)
+		return nil // one is enough
 	}
 	for _, err := range errs {
 		if strings.Contains(err.Error(), pika.ErrMsgLagNotMatch) {
-			return errors.Errorf("slot-[%d] backup %s, min_lag(%d)>gap(%d)", m.Id, pika.ErrMsgLagNotMatch, targetMasterSlotInfo.GetMinReplLag(), gap)
+			return errors.Errorf("slot-[%d] backup %s, min_lag(%d)>gap(%d)", m.Id, pika.ErrMsgLagNotMatch, masterSlotInfo.GetMinReplLag(), gap)
 		}
 	}
-	return errors.Errorf("slot-[%d] backup not ok, min_lag(%d)>gap(%d)", m.Id, targetMasterSlotInfo.GetMinReplLag(), gap)
+	return errors.Errorf("slot-[%d] backup not ok, min_lag(%d)>gap(%d)", m.Id, masterSlotInfo.GetMinReplLag(), gap)
 }
 
-func (s *Topom) GetSlotMigrationProgress(m *models.SlotMapping, rollbackTimes int, err error) models.SlotMigrationProgress {
-	p := models.NewSlotMigrationProgress(m.Action.Info.SourceMaster, m.Action.Info.TargetMaster, rollbackTimes, err)
+func (s *Topom) GetSlotMigrationProgress(ctx *context, m *models.SlotMapping, rollbackTimes int, err error) models.SlotMigrationProgress {
+	targetSlavesMaster := func() string {
+		switch m.Action.State {
+		case models.ActionPending, models.ActionPreparing, models.ActionWatching, models.ActionPrepared:
+			return m.Action.Info.SourceMaster
+		case models.ActionCleanup, models.ActionFinished:
+			return m.Action.Info.TargetMaster
+		default:
+			return ""
+		}
+	}()
 
-	if replInfo, err := s.getSlaveReplInfo(m, m.Action.Info.SourceMaster, m.Action.Info.TargetMaster); err == nil {
-		p.Main.TargetMaster = &replInfo
+	p := models.NewSlotMigrationProgress(m.Action.Info.SourceMaster, targetSlavesMaster, rollbackTimes, err)
+	if m.Action.State == models.ActionCleanup || m.Action.State == models.ActionFinished {
+		p.Main.TargetMaster = models.SlaveReplProgress{
+			Addr:     m.Action.Info.TargetMaster,
+			Progress: "completed",
+		}
+	} else {
+		replInfo, err := s.getSlaveReplInfo(m, m.Action.Info.SourceMaster, m.Action.Info.TargetMaster)
+		p.Main.TargetMaster = models.NewSlaveReplProgress(replInfo, err)
 	}
-	if targetMasterSlotInfo, err := s.getTargetMasterSlotInfo(m); err == nil {
-		p.Backup.TargetSlaves = targetMasterSlotInfo.SlaveReplInfos
+	if targetSlavesMasterSlotInfo, err := s.getMasterSlotInfo(m, targetSlavesMaster); err == nil {
+		for _, targetSlave := range ctx.getGroupSlaves(m.Action.TargetId) {
+			targetSlaveReplInfo, err := targetSlavesMasterSlotInfo.FindSlaveReplInfo(targetSlave)
+			p.Backup.TargetSlaves = append(p.Backup.TargetSlaves, models.NewSlaveReplProgress(targetSlaveReplInfo, err))
+		}
 	}
 	return p
 }
@@ -260,7 +264,7 @@ func (s *Topom) GetSlotMigrationProgress(m *models.SlotMapping, rollbackTimes in
 func (s *Topom) getSlaveReplInfo(m *models.SlotMapping, masterAddr, slaveAddr string) (pika.SlaveReplInfo, error) {
 	masterSlotInfo, err := s.getMasterSlotInfo(m, masterAddr)
 	if err != nil {
-		return pika.InvalidSlaveReplInfo, err
+		return pika.InvalidSlaveReplInfo(slaveAddr), err
 	}
 	return masterSlotInfo.FindSlaveReplInfo(slaveAddr)
 }
@@ -272,27 +276,21 @@ func (s *Topom) getMasterSlotInfo(m *models.SlotMapping, masterAddr string) (pik
 	if masterAddr == m.Action.Info.TargetMaster {
 		return s.getTargetMasterSlotInfo(m)
 	}
-	return pika.SlotInfo{}, fmt.Errorf("master %s neither SourceMaster %s nor TargetMaster %s", masterAddr, m.Action.Info.SourceMaster, m.Action.Info.TargetMaster)
+	return pika.SlotInfo{}, fmt.Errorf("master '%s' neither SourceMaster %s nor TargetMaster %s", masterAddr, m.Action.Info.SourceMaster, m.Action.Info.TargetMaster)
 }
 
 func (s *Topom) getSourceMasterSlotInfo(m *models.SlotMapping) (pika.SlotInfo, error) {
-	if m.Action.Info.SourceMasterSlotInfo == nil || m.Action.Info.SourceMasterSlotInfo.IsExpired() {
-		sourceMasterSlotInfo, err := s.getPikaSlotInfo(m.Action.Info.SourceMaster, m.GetSourceMasterSlot())
-		if err != nil {
-			return pika.SlotInfo{}, errors.Errorf("slot-[%d], can't find source master %s slot info: '%v'", m.Id, m.Action.Info.SourceMaster, err)
-		}
-		m.Action.Info.SourceMasterSlotInfo = models.NewCachedSlotInfo(sourceMasterSlotInfo, time.Second)
+	sourceMasterSlotInfo, err := s.getPikaSlotInfo(m.Action.Info.SourceMaster, m.GetSourceSlot())
+	if err != nil {
+		return pika.SlotInfo{}, errors.Errorf("slot-[%d], can't find source master %s slot info: '%v'", m.Id, m.Action.Info.SourceMaster, err)
 	}
-	return m.Action.Info.SourceMasterSlotInfo.SlotInfo, nil
+	return sourceMasterSlotInfo, nil
 }
 
 func (s *Topom) getTargetMasterSlotInfo(m *models.SlotMapping) (pika.SlotInfo, error) {
-	if m.Action.Info.TargetMasterSlotInfo == nil || m.Action.Info.TargetMasterSlotInfo.IsExpired() {
-		targetMasterSlotInfo, err := s.getPikaSlotInfo(m.Action.Info.TargetMaster, m.Id)
-		if err != nil {
-			return pika.SlotInfo{}, errors.Errorf("slot-[%d], can't find target master %s slot info: '%v'", m.Id, m.Action.Info.TargetMaster, err)
-		}
-		m.Action.Info.TargetMasterSlotInfo = models.NewCachedSlotInfo(targetMasterSlotInfo, time.Second)
+	targetMasterSlotInfo, err := s.getPikaSlotInfo(m.Action.Info.TargetMaster, m.Id)
+	if err != nil {
+		return pika.SlotInfo{}, errors.Errorf("slot-[%d], can't find target master %s slot info: '%v'", m.Id, m.Action.Info.TargetMaster, err)
 	}
-	return m.Action.Info.TargetMasterSlotInfo.SlotInfo, nil
+	return targetMasterSlotInfo, nil
 }

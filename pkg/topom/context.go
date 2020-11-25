@@ -267,6 +267,10 @@ func (ctx *context) getGroupSlaves(gid int) []string {
 	return []string{}
 }
 
+func (ctx *context) getGroupSlavesMaster(gid int) []string {
+	return append(ctx.getGroupSlaves(gid), ctx.getGroupMaster(gid))
+}
+
 func (ctx *context) getGroupMasters() map[int]string {
 	var masters = make(map[int]string)
 	for _, g := range ctx.group {
