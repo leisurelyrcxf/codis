@@ -244,10 +244,7 @@ func (s *Topom) GetSlotMigrationProgress(ctx *context, m *models.SlotMapping, ro
 
 	p := models.NewSlotMigrationProgress(m.Action.Info.SourceMaster, targetSlavesMaster, rollbackTimes, err)
 	if m.Action.State == models.ActionCleanup || m.Action.State == models.ActionFinished {
-		p.Main.TargetMaster = models.SlaveReplProgress{
-			Addr:     m.Action.Info.TargetMaster,
-			Progress: "completed",
-		}
+		p.Main.TargetMaster = models.SlaveReplProgress{Addr: m.Action.Info.TargetMaster, Progress: "detached"}
 	} else {
 		replInfo, err := s.getSlaveReplInfo(m, m.Action.Info.SourceMaster, m.Action.Info.TargetMaster)
 		p.Main.TargetMaster = models.NewSlaveReplProgress(replInfo, err)

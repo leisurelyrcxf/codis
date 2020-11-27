@@ -59,7 +59,7 @@ type SlaveReplProgress struct {
 func NewSlaveReplProgress(info pika.SlaveReplInfo, err error) SlaveReplProgress {
 	progress := "migrating"
 	if err := info.GapReached(0); err == nil {
-		progress = "completed"
+		progress = "prepared"
 	}
 	if err != nil {
 		progress = err.Error()

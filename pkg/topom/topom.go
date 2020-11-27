@@ -722,7 +722,8 @@ func (p *Topom) collectPrometheusMetrics() {
 		cmdMetrics = map[string]string{
 			"user_seconds": "cmd user seconds",
 			"total":        "cmd total",
-			"failure":      "cmd failure",
+			"failure":      "cmd failure count",
+			"redis_error":  "redis error count",
 		}
 
 		cmdGauges = make(map[string]*prometheus.GaugeVec)
@@ -941,6 +942,7 @@ func (p *Topom) collectPrometheusMetrics() {
 						cmdGauges["user_seconds"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr, LabelCmdName: cmd.OpStr}).Set(float64(cmd.Usecs))
 						cmdGauges["total"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr, LabelCmdName: cmd.OpStr}).Set(float64(cmd.Calls))
 						cmdGauges["failure"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr, LabelCmdName: cmd.OpStr}).Set(float64(cmd.Fails))
+						cmdGauges["redis_error"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr, LabelCmdName: cmd.OpStr}).Set(float64(cmd.RedisErrType))
 					}
 				}
 
