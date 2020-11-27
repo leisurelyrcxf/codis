@@ -729,7 +729,7 @@ func (s *Session) handleRequestSlowLogGetAll(r *Request, d *Router) error {
 		}
 	}
 	r.Coalesce = func() error {
-		array := make([]*redis.Resp, 0, len(sub) * 64)
+		array := make([]*redis.Resp, 0, len(sub)*64)
 		for _, s := range sub {
 			if err := s.Err; err != nil {
 				return err
@@ -766,7 +766,7 @@ func (s *Session) handleRequestSlowLogGet(r *Request, d *Router, maxLen int) err
 		}
 	}
 	r.Coalesce = func() error {
-		array := make([]*redis.Resp, 0, len(sub) * maxLen)
+		array := make([]*redis.Resp, 0, len(sub)*maxLen)
 		for _, s := range sub {
 			if err := s.Err; err != nil {
 				return err
@@ -806,8 +806,7 @@ func (s *Session) incrOpStats(r *Request, t redis.RespType) {
 	e := s.getOpStats(r.OpStr)
 	e.calls.Incr()
 	e.nsecs.Add(time.Now().UnixNano() - r.UnixNano)
-	switch t {
-	case redis.TypeError:
+	if t == redis.TypeError {
 		e.redis.errors.Incr()
 	}
 }
