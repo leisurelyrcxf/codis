@@ -11,8 +11,8 @@ import (
 )
 
 var (
-	pikaSlaveRegExp            = regexp.MustCompile(`^slave\[\d+\]$`)
-	masterSlaveSeparatorRegExp = regexp.MustCompile(`^---(-+)$`)
+	SlaveRegExp                = regexp.MustCompile(`^slave\[\d+\]$`)
+	MasterSlaveSeparatorRegExp = regexp.MustCompile(`^---(-+)$`)
 	// ErrSlotNotExists error
 	ErrSlotNotExists = fmt.Errorf("slot not exists")
 	// ErrInvalidSlotInfo invalid slot info
@@ -57,13 +57,16 @@ func ParseSlotInfo(slotInfoString string) (info SlotInfo, err error) {
 	for _, item := range items {
 		colonIndex := strings.Index(item, ":")
 		if colonIndex == -1 {
-			if !masterSlaveSeparatorRegExp.MatchString(item) {
+			if !MasterSlaveSeparatorRegExp.MatchString(item) {
 				log.Errorf("[parseSlotInfo] no ':' in item '%s'", item)
 			}
 			continue
 		}
 		key, value := strings.TrimSpace(item[:colonIndex]), strings.TrimSpace(item[colonIndex+1:])
-		if info.Role.IsMaster() && pikaSlaveRegExp.MatchString(key) {
+		if info.Role.IsMaster() && SlaveRegExp.MatchString(key) {
+			if slaveReplInfo != nil {
+				info.SlaveReplInfos = append(info.SlaveReplInfos, *slaveReplInfo)
+			}
 			slaveReplInfo = &SlaveReplInfo{Addr: value, Lag: math.MaxUint64}
 			continue
 		}
@@ -73,12 +76,12 @@ func ParseSlotInfo(slotInfoString string) (info SlotInfo, err error) {
 				log.Errorf("[parseSlotInfo] slave repl info is nil")
 				return info, ErrInvalidSlaveReplInfo
 			}
-			if slaveReplInfo.Lag, err = strconv.ParseUint(value, 10, 64); err != nil {
+			var lag uint64
+			if lag, err = strconv.ParseUint(value, 10, 64); err != nil {
 				log.Errorf("[parseSlotInfo] lag parse fail, lag: %s, err: %v", value, err)
 				return info, err
 			}
-			info.SlaveReplInfos = append(info.SlaveReplInfos, *slaveReplInfo)
-			slaveReplInfo = nil
+			slaveReplInfo.Lag = lag
 		case "replication_status":
 			if slaveReplInfo == nil {
 				log.Errorf("[parseSlotInfo] slave repl info is nil")
@@ -139,6 +142,10 @@ func ParseSlotInfo(slotInfoString string) (info SlotInfo, err error) {
 			}
 			info.ConnectedSlaves = int(connectedSlaves)
 		}
+	}
+
+	if slaveReplInfo != nil {
+		info.SlaveReplInfos = append(info.SlaveReplInfos, *slaveReplInfo)
 	}
 
 	if info.Slot == -1 {

@@ -100,6 +100,10 @@ func (l *LogLevel) ParseFromString(s string) bool {
 	return true
 }
 
+func (l *LogLevel) Get() LogLevel {
+	return LogLevel(atomic.LoadInt64((*int64)(l)))
+}
+
 func (l *LogLevel) Set(v LogLevel) {
 	atomic.StoreInt64((*int64)(l), int64(v))
 }
@@ -160,6 +164,10 @@ func (l *Logger) SetPrefix(prefix string) {
 	l.log.SetPrefix(prefix)
 }
 
+func (l *Logger) GetLevel() LogLevel {
+	return l.level.Get()
+}
+
 func (l *Logger) SetLevel(v LogLevel) {
 	l.level.Set(v)
 }
@@ -172,6 +180,10 @@ func (l *Logger) SetLevelString(s string) bool {
 		l.SetLevel(v)
 		return true
 	}
+}
+
+func (l *Logger) GetTraceLevel() LogLevel {
+	return l.trace.Get()
 }
 
 func (l *Logger) SetTraceLevel(v LogLevel) {
@@ -422,6 +434,10 @@ func SetFlags(flags int) {
 
 func SetPrefix(prefix string) {
 	StdLog.SetPrefix(prefix)
+}
+
+func GetLevel() LogLevel {
+	return StdLog.GetLevel()
 }
 
 func SetLevel(v LogLevel) {

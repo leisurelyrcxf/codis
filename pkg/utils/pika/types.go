@@ -3,15 +3,19 @@ package pika
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 
 	"github.com/CodisLabs/codis/pkg/utils/errors"
+	"github.com/CodisLabs/codis/pkg/utils/log"
 )
 
 const ErrMsgLagNotMatch = "lag not match"
 
 var (
 	ErrSlaveNotFound = errors.New("slave not found")
+	// ErrSlaveNotLinkedWithAbnormalSlaveStatus error
+	ErrSlaveNotLinkedWithAbnormalSlaveStatus = errors.New("slave not linked, slave status abnormal")
 
 	InvalidSlaveReplInfo = func(addr string) SlaveReplInfo {
 		return SlaveReplInfo{
@@ -98,11 +102,17 @@ type SlotInfo struct {
 	SlaveReplInfos  []SlaveReplInfo
 }
 
+// NewSlotInfo generates slot info for newly created slot.
+func NewSlotInfo(slot int) SlotInfo {
+	return SlotInfo{Slot: slot}
+}
+
 // HasSlaves return if this slot has slaves
 func (i SlotInfo) HasSlaves() bool {
 	return i.ConnectedSlaves > 0 || len(i.SlaveReplInfos) > 0
 }
 
+// FindSlaveReplInfo find slave repl info
 func (i *SlotInfo) FindSlaveReplInfo(slaveAddr string) (SlaveReplInfo, error) {
 	slaveAddr = strings.Replace(slaveAddr, "localhost", "127.0.0.1", 1)
 	for _, slaveReplInfo := range i.SlaveReplInfos {
@@ -138,6 +148,47 @@ func (i *SlotInfo) GetMinReplLag() uint64 {
 		}
 	}
 	return minLag
+}
+
+// BecomeMaster generates new proper pika slot info after becoming master. TODO test against this
+func (i SlotInfo) BecomeMaster() SlotInfo {
+	return SlotInfo{
+		Slot:            i.Slot,
+		BinlogOffset:    i.BinlogOffset,
+		Role:            i.Role.DeSlave(),
+		MasterAddr:      "",
+		ConnectedSlaves: i.ConnectedSlaves,
+		SlaveReplInfos:  i.SlaveReplInfos,
+	}
+}
+
+// UnlinkSlaves generates new proper pika slot info after slaves unlinked. TODO test against this
+func (i SlotInfo) UnlinkSlaves() SlotInfo {
+	return SlotInfo{
+		Slot:            i.Slot,
+		BinlogOffset:    i.BinlogOffset,
+		Role:            i.Role.DeMaster(),
+		MasterAddr:      i.MasterAddr,
+		ConnectedSlaves: 0,
+		SlaveReplInfos:  nil,
+	}
+}
+
+type SlotsInfo map[int]SlotInfo
+
+func (ssi SlotsInfo) GetSlaveAddrs() []string {
+	slaveAddrs := make(map[string]struct{})
+	for _, slotInfo := range ssi {
+		for _, slaveReplInfo := range slotInfo.SlaveReplInfos {
+			slaveAddrs[slaveReplInfo.Addr] = struct{}{}
+		}
+	}
+	var slaveAddrList []string
+	for slaveAddr := range slaveAddrs {
+		slaveAddrList = append(slaveAddrList, slaveAddr)
+	}
+	sort.Strings(slaveAddrList)
+	return slaveAddrList
 }
 
 // Role represents role of pika
@@ -210,16 +261,17 @@ func (r Role) IsSlave() bool {
 
 // ParseRole parse pika role from string representation
 func ParseRole(roleStr string) Role {
-	roleStr = strings.ToLower(roleStr)
-	if roleStr == string(RoleMaster) {
+	Role := Role(strings.ToLower(roleStr))
+	if Role == RoleMaster {
 		return RoleMaster
 	}
-	if roleStr == string(RoleSlave) {
+	if Role == RoleSlave {
 		return RoleSlave
 	}
-	if roleStr == string(RoleMasterSlave) {
+	if Role == RoleMasterSlave {
 		return RoleMasterSlave
 	}
+	log.Errorf("[ParseRole] unknown pika role %s", roleStr)
 	return RoleUnknown
 }
 
@@ -243,13 +295,16 @@ const (
 
 // ParseSlaveBinlogStatus parse binlog status
 func ParseSlaveBinlogStatus(str string) SlaveStatus {
-	if str == string(SlaveStatusBinlogSync) {
+	ss := SlaveStatus(str)
+	if ss == SlaveStatusBinlogSync {
 		return SlaveStatusBinlogSync
 	}
-	if str == string(SlaveStatusNotSync) {
+	if ss == SlaveStatusNotSync {
 		return SlaveStatusNotSync
 	}
-	return SlaveStatus(str) // TODO fix this
+	log.Errorf("[ParseSlaveBinlogStatus] unknown slave status %s", str)
+	return ss
+	// return SlaveStatusUnknown TODO fix this after we get full list of this
 }
 
 // String method
