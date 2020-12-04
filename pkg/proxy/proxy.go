@@ -16,6 +16,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/CodisLabs/codis/pkg/utils/sync2/atomic2"
+
 	"github.com/CodisLabs/codis/pkg/models"
 	"github.com/CodisLabs/codis/pkg/utils"
 	"github.com/CodisLabs/codis/pkg/utils/errors"
@@ -25,6 +27,8 @@ import (
 	"github.com/CodisLabs/codis/pkg/utils/rpc"
 	"github.com/CodisLabs/codis/pkg/utils/unsafe2"
 )
+
+var enableReadHA atomic2.Bool
 
 type Proxy struct {
 	mu sync.Mutex
@@ -76,6 +80,8 @@ func New(config *Config) (*Proxy, error) {
 	s.model.DataCenter = config.ProxyDataCenter
 	s.model.Pid = os.Getpid()
 	s.model.Pwd, _ = os.Getwd()
+
+	enableReadHA.Set(s.config.EnableReadHA)
 	if b, err := exec.Command("uname", "-a").Output(); err != nil {
 		log.WarnErrorf(err, "run command uname failed")
 	} else {
@@ -618,7 +624,7 @@ func (s *Proxy) Stats(flags StatsFlags) *Stats {
 
 	stats.Sessions.Total = SessionsTotal()
 	stats.Sessions.Alive = SessionsAlive()
-	stats.Sessions.Max   = s.Config().ProxyMaxClients
+	stats.Sessions.Max = s.Config().ProxyMaxClients
 
 	if u := GetSysUsage(); u != nil {
 		stats.Rusage.Now = u.Now.String()

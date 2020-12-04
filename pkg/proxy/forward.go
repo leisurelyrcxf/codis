@@ -213,20 +213,26 @@ func (d *forwardHelper) slotsmgrtExecWrapper(s *Slot, hkey []byte, database int3
 	}
 }
 
-func (d *forwardHelper) forward2(s *Slot, r *Request, excludeAddr string) *BackendConn {
+func (d *forwardHelper) forward2(s *Slot, r *Request, excludeAddr string) (bc *BackendConn) {
 	var database, seed = r.Database, r.Seed16()
 	if s.migrate.bc == nil && !r.IsMasterOnly() && len(s.replicaGroups) != 0 {
+		defer func() {
+			if r.Retryer != nil || enableReadHA.IsFalse() || bc == nil {
+				return
+			}
+			bcAddr := bc.addr
+			r.Retryer = func(r *Request) *BackendConn {
+				bc := d.forward2(s, r, bcAddr)
+				r.Retryer = nil // Retry at most once
+				return bc
+			}
+		}()
+
 		for _, group := range s.replicaGroups {
 			var i = seed
 			for range group {
 				i = (i + 1) % uint(len(group))
 				if bc := group[i].BackendConn(database, seed, false); bc != nil && bc.addr != excludeAddr {
-					bcAddr := bc.addr
-					r.Retryer = func(r *Request) *BackendConn {
-						bc := d.forward2(s, r, bcAddr)
-						r.Retryer = nil // Retry at most once
-						return bc
-					}
 					return bc
 				}
 			}

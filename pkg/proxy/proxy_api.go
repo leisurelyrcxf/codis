@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"fmt"
 	"net/http"
 	"runtime"
 	"strconv"
@@ -80,6 +81,7 @@ func newApiServer(p *Proxy) http.Handler {
 		r.Put("/fillslots/:xauth", binding.Json([]*models.Slot{}), api.FillSlots)
 		r.Put("/sentinels/:xauth", binding.Json(models.Sentinel{}), api.SetSentinels)
 		r.Put("/sentinels/:xauth/rewatch", api.RewatchSentinels)
+		r.Put("/enable-read-ha/:xauth/:ha", api.EnableReadHA)
 	})
 
 	m.MapTo(r, (*martini.Routes)(nil))
@@ -235,6 +237,38 @@ func (s *apiServer) RewatchSentinels(params martini.Params) (int, string) {
 	return rpc.ApiResponseJson("OK")
 }
 
+func (s *apiServer) EnableReadHA(params martini.Params) (int, string) {
+	if err := s.verifyXAuth(params); err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	ha, err := s.parseBool(params, "ha")
+	if err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	enableReadHA.Set(ha)
+	return rpc.ApiResponseJson("OK")
+}
+
+func (s *apiServer) parseInteger(params martini.Params, entry string) (int, error) {
+	text := params[entry]
+	if text == "" {
+		return 0, fmt.Errorf("missing %s", entry)
+	}
+	v, err := strconv.Atoi(text)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s", entry)
+	}
+	return v, nil
+}
+
+func (s *apiServer) parseBool(params martini.Params, entry string) (bool, error) {
+	intVal, err := s.parseInteger(params, entry)
+	if err != nil {
+		return false, err
+	}
+	return int2Bool(intVal), nil
+}
+
 type ApiClient struct {
 	addr  string
 	xauth string
@@ -340,4 +374,20 @@ func (c *ApiClient) SetSentinels(sentinel *models.Sentinel) error {
 func (c *ApiClient) RewatchSentinels() error {
 	url := c.encodeURL("/api/proxy/sentinels/%s/rewatch", c.xauth)
 	return rpc.ApiPutJson(url, nil, nil)
+}
+
+func (c *ApiClient) EnableReadHA(ha bool) error {
+	url := c.encodeURL("/api/proxy/enable-read-ha/%s/%d", c.xauth, bool2Int(ha))
+	return rpc.ApiPutJson(url, nil, nil)
+}
+
+func bool2Int(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func int2Bool(i int) bool {
+	return i != 0
 }
