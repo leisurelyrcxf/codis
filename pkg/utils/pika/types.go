@@ -14,8 +14,6 @@ const ErrMsgLagNotMatch = "lag not match"
 
 var (
 	ErrSlaveNotFound = errors.New("slave not found")
-	// ErrSlaveNotLinkedWithAbnormalSlaveStatus error
-	ErrSlaveNotLinkedWithAbnormalSlaveStatus = errors.New("slave not linked, slave status abnormal")
 
 	InvalidSlaveReplInfo = func(addr string) SlaveReplInfo {
 		return SlaveReplInfo{
@@ -86,6 +84,10 @@ func (s SlaveReplInfo) GapReached(gap uint64) error {
 	return nil
 }
 
+func (s SlaveReplInfo) IsBinlogSynced() bool {
+	return s.Addr != "" && s.Status == SlaveStatusBinlogSync
+}
+
 // SlotInfo
 type SlotInfo struct {
 	Slot int
@@ -113,7 +115,7 @@ func (i SlotInfo) HasSlaves() bool {
 }
 
 // FindSlaveReplInfo find slave repl info
-func (i *SlotInfo) FindSlaveReplInfo(slaveAddr string) (SlaveReplInfo, error) {
+func (i SlotInfo) FindSlaveReplInfo(slaveAddr string) (SlaveReplInfo, error) {
 	slaveAddr = strings.Replace(slaveAddr, "localhost", "127.0.0.1", 1)
 	for _, slaveReplInfo := range i.SlaveReplInfos {
 		if slaveReplInfo.Addr == slaveAddr {
@@ -124,23 +126,24 @@ func (i *SlotInfo) FindSlaveReplInfo(slaveAddr string) (SlaveReplInfo, error) {
 }
 
 func (i SlotInfo) IsLinked(slaveAddr string) bool {
-	slaveReplInfo, _ := i.FindSlaveReplInfo(slaveAddr)
-	return slaveReplInfo.Status == SlaveStatusBinlogSync
+	_, err := i.FindSlaveReplInfo(slaveAddr)
+	return err == nil
 }
 
-func (i *SlotInfo) SyncedSlaves() (okSlaves []SlaveReplInfo) {
-	for _, slave := range i.SlaveReplInfos {
-		if slave.Status == SlaveStatusBinlogSync {
-			okSlaves = append(okSlaves, slave)
+func (i SlotInfo) LinkedSlaves(slaveAddrs []string) (linkedSlaves []string) {
+	for _, slave := range slaveAddrs {
+		if i.IsLinked(slave) {
+			linkedSlaves = append(linkedSlaves, slave)
 		}
 	}
 	return
 }
 
-func (i *SlotInfo) GetMinReplLag() uint64 {
+func (i SlotInfo) GetMinReplLag(slaveAddrs []string) uint64 {
 	minLag := uint64(math.MaxUint64)
-	for _, slaveReplInfo := range i.SlaveReplInfos {
-		if slaveReplInfo.Status != SlaveStatusBinlogSync {
+	for _, slave := range slaveAddrs {
+		slaveReplInfo, err := i.FindSlaveReplInfo(slave)
+		if err != nil {
 			continue
 		}
 		if slaveReplInfo.Lag < minLag {
@@ -148,6 +151,17 @@ func (i *SlotInfo) GetMinReplLag() uint64 {
 		}
 	}
 	return minLag
+}
+
+func (i SlotInfo) GapReached(slaveAddr string, gap uint64) error {
+	slaveReplInfo, err := i.FindSlaveReplInfo(slaveAddr)
+	if err != nil {
+		return errors.Errorf("%v: slaveAddr:%s,slot:%d", err, slaveAddr, i.Slot)
+	}
+	if err := slaveReplInfo.GapReached(gap); err != nil {
+		return errors.Errorf("%v: slaveAddr:%s,slot:%d", err, slaveAddr, i.Slot)
+	}
+	return nil
 }
 
 // BecomeMaster generates new proper pika slot info after becoming master. TODO test against this

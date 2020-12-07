@@ -88,3 +88,13 @@ func Equal(err1, err2 error) bool {
 func NotEqual(err1, err2 error) bool {
 	return !Equal(err1, err2)
 }
+
+func Wrap(err, other error) error {
+	if err == nil {
+		return other
+	}
+	if other == nil {
+		return err
+	}
+	return Errorf("%v: %v", err, other)
+}
