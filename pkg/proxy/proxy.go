@@ -55,11 +55,22 @@ type Proxy struct {
 		servers []string
 	}
 	jodis *Jodis
+
+	ps ProxySessions
+}
+
+type ProxySessions struct {
+	sessionMap map[*Session]struct{}
+	smm        sync.RWMutex
 }
 
 var ErrClosedProxy = errors.New("use of closed proxy")
 
 func New(config *Config) (*Proxy, error) {
+	return newProxy(config, false)
+}
+
+func newProxy(config *Config, test bool) (*Proxy, error) {
 	if err := config.Validate(); err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -82,6 +93,7 @@ func New(config *Config) (*Proxy, error) {
 	s.model.Pwd, _ = os.Getwd()
 
 	enableReadHA.Set(s.config.EnableReadHA)
+	s.ps.sessionMap = make(map[*Session]struct{})
 	if b, err := exec.Command("uname", "-a").Output(); err != nil {
 		log.WarnErrorf(err, "run command uname failed")
 	} else {
@@ -89,7 +101,7 @@ func New(config *Config) (*Proxy, error) {
 	}
 	s.model.Hostname = utils.Hostname
 
-	if err := s.setup(config); err != nil {
+	if err := s.setup(config, test); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -108,7 +120,7 @@ func New(config *Config) (*Proxy, error) {
 	return s, nil
 }
 
-func (s *Proxy) setup(config *Config) error {
+func (s *Proxy) setup(config *Config, test bool) error {
 	var localIp string
 	var er error
 	if s.config.DashboardDddr != "" {
@@ -129,7 +141,10 @@ func (s *Proxy) setup(config *Config) error {
 		}
 	}
 	if localIp == "" {
-		return errors.New("Both DashboardDddr and CoordinatorAddr are not correct")
+		if !test {
+			return errors.New("Both DashboardDddr and CoordinatorAddr are not correct")
+		}
+		localIp = "127.0.0.1"
 	}
 
 	//proxy
@@ -223,6 +238,14 @@ func (s *Proxy) Close() error {
 	if s.lproxy != nil {
 		s.lproxy.Close()
 	}
+
+	s.ps.closeAllSessionReader()
+
+	for sa := SessionsAlive(); sa > 0; sa = SessionsAlive() {
+		time.Sleep(1 * time.Second)
+		log.Infof("[%p] proxy is closing, %d sessions remains", s, sa)
+	}
+
 	if s.router != nil {
 		s.router.Close()
 	}
@@ -420,7 +443,12 @@ func (s *Proxy) serveAdmin() {
 	case <-s.exit.C:
 		log.Warnf("[%p] admin shutdown", s)
 	case err := <-eh:
-		log.ErrorErrorf(err, "[%p] admin exit on error", s)
+		select {
+		case <-s.exit.C:
+			log.Warnf("[%p] admin shutdown", s)
+		default:
+			log.ErrorErrorf(err, "[%p] admin exit on error", s)
+		}
 	}
 }
 
@@ -442,7 +470,11 @@ func (s *Proxy) serveProxy() {
 			if err != nil {
 				return err
 			}
-			NewSession(c, s.config).Start(s.router)
+			NewSession(c, s.config).Start(s.router, func(ss *Session) bool {
+				return s.ps.addSession(ss)
+			}, func(ss *Session) bool {
+				return s.ps.removeSession(ss)
+			})
 		}
 	}(s.lproxy)
 

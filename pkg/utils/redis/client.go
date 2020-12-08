@@ -85,6 +85,14 @@ func (c *Client) Do(cmd string, args ...interface{}) (interface{}, error) {
 	return r, nil
 }
 
+func (c *Client) Good() error {
+	if _, err := c.Do("PING"); err != nil {
+		c.Close()
+		return errors.Trace(err)
+	}
+	return nil
+}
+
 func (c *Client) Send(cmd string, args ...interface{}) error {
 	if err := c.conn.Send(cmd, args...); err != nil {
 		c.Close()
