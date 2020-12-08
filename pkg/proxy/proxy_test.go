@@ -5,10 +5,13 @@ package proxy
 
 import (
 	"testing"
+	"time"
 
 	"github.com/CodisLabs/codis/pkg/models"
 	"github.com/CodisLabs/codis/pkg/utils/assert"
 	"github.com/CodisLabs/codis/pkg/utils/log"
+	utilsredis "github.com/CodisLabs/codis/pkg/utils/redis"
+	"github.com/CodisLabs/codis/pkg/utils/sync2/atomic2"
 )
 
 var config = newProxyConfig()
@@ -27,7 +30,7 @@ func newProxyConfig() *Config {
 }
 
 func openProxy() (*Proxy, string) {
-	s, err := New(config)
+	s, err := newProxy(config, true)
 	assert.MustNoError(err)
 	return s, s.Model().AdminAddr
 }
@@ -137,4 +140,41 @@ func TestStartAndShutdown(x *testing.T) {
 
 	err3 := c.Start()
 	assert.Must(err3 != nil)
+}
+
+func TestGracefulShutdown(t *testing.T) {
+	s, _ := openProxy()
+	s.router.online = true
+	log.SetLevel(log.LevelWarn)
+	defer func() {
+		s.Close()
+	}()
+
+	var closed atomic2.Bool
+	proxyAddr := s.lproxy.Addr().String()
+	var sessionCreated atomic2.Int64
+	go func() {
+		for closed.IsFalse() {
+			go func() {
+				cli, err := utilsredis.NewClient(proxyAddr, "", 5*time.Second)
+				if err != nil {
+					return
+				}
+				defer cli.Close()
+
+				sessionCreated.Add(1)
+				_ = cli.Good()
+				time.Sleep(3600 * time.Second)
+			}()
+			time.Sleep(1 * time.Microsecond)
+		}
+	}()
+
+	waitPeriod := 5 * time.Second
+	time.Sleep(waitPeriod)
+	closed.Set(true)
+	if err := s.Close(); err != nil {
+		log.Errorf("close error: %v", err)
+	}
+	log.Warnf("created %d sessions in %s", sessionCreated.Int64(), waitPeriod)
 }

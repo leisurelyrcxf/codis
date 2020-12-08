@@ -113,7 +113,7 @@ var (
 
 var RespOK = redis.NewString([]byte("OK"))
 
-func (s *Session) Start(d *Router) {
+func (s *Session) Start(d *Router, prepareSession, exitSession func(ss *Session) bool) {
 	s.start.Do(func() {
 		if int(incrSessions()) > s.config.ProxyMaxClients {
 			go func() {
@@ -137,11 +137,23 @@ func (s *Session) Start(d *Router) {
 			return
 		}
 
+		if !prepareSession(s) {
+			go func() {
+				s.Conn.Encode(redis.NewErrorf("ERR proxy is closed"), true)
+				s.CloseWithError(ErrClosedProxy)
+				s.incrOpFails(nil, nil)
+				s.flushOpStats(true)
+			}()
+			decrSessions()
+			return
+		}
+
 		tasks := NewRequestChanBuffer(1024)
 
 		go func() {
 			s.loopWriter(tasks)
 			decrSessions()
+			exitSession(s)
 		}()
 
 		go func() {
