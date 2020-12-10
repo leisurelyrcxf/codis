@@ -146,9 +146,6 @@ func TestGracefulShutdown(t *testing.T) {
 	s, _ := openProxy()
 	s.router.online = true
 	log.SetLevel(log.LevelWarn)
-	defer func() {
-		s.Close()
-	}()
 
 	var closed atomic2.Bool
 	proxyAddr := s.lproxy.Addr().String()
@@ -163,7 +160,7 @@ func TestGracefulShutdown(t *testing.T) {
 				defer cli.Close()
 
 				sessionCreated.Add(1)
-				_ = cli.Good()
+				//_ = cli.Good()
 				time.Sleep(3600 * time.Second)
 			}()
 			time.Sleep(1 * time.Microsecond)
@@ -172,9 +169,10 @@ func TestGracefulShutdown(t *testing.T) {
 
 	waitPeriod := 5 * time.Second
 	time.Sleep(waitPeriod)
+	createdSessionCount := sessionCreated.Int64()
 	closed.Set(true)
 	if err := s.Close(); err != nil {
 		log.Errorf("close error: %v", err)
 	}
-	log.Warnf("created %d sessions in %s", sessionCreated.Int64(), waitPeriod)
+	t.Logf("created %d sessions in %s", createdSessionCount, waitPeriod)
 }

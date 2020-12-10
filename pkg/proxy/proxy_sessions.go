@@ -26,7 +26,7 @@ func (ps *ProxySessions) closeAllSessionReader() {
 	ps.smm.Lock()
 	defer ps.smm.Unlock()
 	for k := range ps.sessionMap {
-		if err := k.CloseReaderWithError(nil); err != nil {
+		if err := k.CloseReaderWithError(ErrClosedProxy); err != nil {
 			log.Errorf("[%p] session reader close on error", k)
 		}
 	}

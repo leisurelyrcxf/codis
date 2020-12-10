@@ -6,6 +6,7 @@ package proxy
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"strconv"
@@ -85,9 +86,13 @@ func NewSession(sock net.Conn, config *Config) *Session {
 func (s *Session) CloseReaderWithError(err error) error {
 	s.exit.Do(func() {
 		if err != nil {
-			log.Infof("session [%p] closed: %s, error: %s", s, s, err)
+			if isEOF(err) {
+				log.Infof("session [%p] reader closed: %s, error: %s", s, s, err)
+			} else {
+				log.Warnf("session [%p] reader closed: %s, error: %s", s, s, err)
+			}
 		} else {
-			log.Infof("session [%p] closed: %s, quit", s, s)
+			log.Infof("session [%p] reader closed: %s, quit", s, s)
 		}
 	})
 	return s.Conn.CloseReader()
@@ -96,13 +101,28 @@ func (s *Session) CloseReaderWithError(err error) error {
 func (s *Session) CloseWithError(err error) error {
 	s.exit.Do(func() {
 		if err != nil {
-			log.Infof("session [%p] closed: %s, error: %s", s, s, err)
+			if isEOF(err) {
+				log.Infof("session [%p] closed: %s, error: %s", s, s, err)
+			} else {
+				log.Warnf("session [%p] closed: %s, error: %s", s, s, err)
+			}
 		} else {
 			log.Infof("session [%p] closed: %s, quit", s, s)
 		}
 	})
 	s.broken.Set(true)
 	return s.Conn.Close()
+}
+
+func isEOF(err error) bool {
+	if err == io.EOF {
+		return true
+	}
+	tracedError, ok := err.(*errors.TracedError)
+	if !ok {
+		return false
+	}
+	return tracedError.Cause == io.EOF
 }
 
 var (
