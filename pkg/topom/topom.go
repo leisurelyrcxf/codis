@@ -620,24 +620,65 @@ func (s *Topom) Overview() (*Overview, error) {
 	}
 }
 
+type gauges []prometheus.Gauge
+
+func newGauges(gs ...prometheus.Gauge) gauges {
+	return gs
+}
+
+func (gs gauges) Set(v float64) {
+	for _, g := range gs {
+		g.Set(v)
+	}
+}
+
 func (p *Topom) collectPrometheusMetrics() {
+	gaugeCollector := func(namespace string, metricsHelper map[string]string, labels []string, gaugeMap map[string]*prometheus.GaugeVec) bool {
+		var gauges []prometheus.Collector
+		for gaugeName, help := range metricsHelper {
+			gauge := prometheus.NewGaugeVec(
+				prometheus.GaugeOpts{
+					Namespace: namespace,
+					Name:      gaugeName,
+					Help:      help,
+				}, labels,
+			)
+			gaugeMap[gaugeName] = gauge
+			gauges = append(gauges, gauge)
+		}
+		prometheus.MustRegister(gauges...)
+		return true
+	}
+
 	type proxyFieldGetter func(*ProxyStats) interface{}
 
 	const (
 		LabelProductName = "product_name"
 		LabelAddr        = "addr"
-		LabelPid         = "pid_in_group"
+		LabelGroup       = "group"
+		LabelPid         = "pid"
 		NanValue         = -1.0
 		LabelCmdName     = "cmd_name"
 	)
 
+	const (
+		NamespaceProxy    = "codis_proxy"
+		NamespaceProxyCMD = "codis_proxy_cmd"
+		NamespacePika     = "pika"
+		NamespaceGroup    = "pika_group"
+	)
+
 	var (
-		proxyNamespace = "codis_proxy"
-
-		proxyHealthMetrics = map[string]string{
-			"up": "whether proxy's status is up",
+		proxyLabels = []string{
+			LabelProductName,
+			LabelAddr,
 		}
-
+		newProxyLabels = func(productName string, proxyAddr string) prometheus.Labels {
+			return prometheus.Labels{
+				LabelProductName: productName,
+				LabelAddr:        proxyAddr,
+			}
+		}
 		proxyMetrics = map[string]string{
 			"ops_total":                "total operations",
 			"ops_fails":                "total failed operations",
@@ -666,7 +707,6 @@ func (p *Topom) collectPrometheusMetrics() {
 			"runtime_general_mallocs":  "runtime general mallocs",
 			"runtime_general_frees":    "runtime general frees",
 		}
-
 		proxyGauges = make(map[string]*prometheus.GaugeVec)
 
 		emptyProxyStats   = &proxy.Stats{}
@@ -714,30 +754,47 @@ func (p *Topom) collectPrometheusMetrics() {
 			"runtime_general_mallocs":  func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).General.Mallocs },
 			"runtime_general_frees":    func(ps *ProxyStats) interface{} { return proxyRStatsGetter(ps).General.Frees },
 		}
+		_ = gaugeCollector(NamespaceProxy, map[string]string{
+			"up": "whether proxy is up",
+		}, proxyLabels, proxyGauges)
+		_ = gaugeCollector(NamespaceProxy, proxyMetrics, proxyLabels, proxyGauges)
 	)
 
 	var (
-		cmdNamespace = "codis_proxy_cmd"
-
-		cmdMetrics = map[string]string{
+		proxyCMDLabels = []string{
+			LabelProductName,
+			LabelAddr,
+			LabelCmdName,
+		}
+		newProxyCMDLabels = func(productName string, proxyAddr string, cmdName string) prometheus.Labels {
+			return prometheus.Labels{
+				LabelProductName: productName,
+				LabelAddr:        proxyAddr,
+				LabelCmdName:     cmdName,
+			}
+		}
+		proxyCMDMetrics = map[string]string{
 			"user_seconds": "cmd user seconds",
 			"total":        "cmd total",
 			"failure":      "cmd failure count",
 			"pika_error":   "pika error count",
 		}
-
-		cmdGauges = make(map[string]*prometheus.GaugeVec)
+		proxyCMDGauges = make(map[string]*prometheus.GaugeVec)
+		_              = gaugeCollector(NamespaceProxyCMD, proxyCMDMetrics, proxyCMDLabels, proxyCMDGauges)
 	)
 
 	var (
-		redisNamespace = p.config.Mode
-
-		redisHealthMetrics = map[string]string{
-			"up": "0",
-			"ok": "0",
+		pikaLabels = []string{
+			LabelProductName,
+			LabelAddr,
 		}
-
-		redisMetrics = map[string]string{
+		newPikaLabels = func(productName string, pikaAddr string) prometheus.Labels {
+			return prometheus.Labels{
+				LabelProductName: productName,
+				LabelAddr:        pikaAddr,
+			}
+		}
+		pikaMetrics = map[string]string{
 			"aof_current_rewrite_time_sec": "-1",
 			"aof_enabled":                  "0",
 			//"aof_last_bgrewrite_status": "ok",
@@ -806,90 +863,40 @@ func (p *Topom) collectPrometheusMetrics() {
 			"db_size":                    "0",
 			"log_size":                   "0",
 		}
-
-		redisGauges = make(map[string]*prometheus.GaugeVec)
+		pikaGauges = make(map[string]*prometheus.GaugeVec)
+		_          = gaugeCollector(NamespacePika, map[string]string{
+			"up": "pika up",
+			"ok": "pika ok",
+		}, pikaLabels, pikaGauges)
+		_ = gaugeCollector(NamespacePika, pikaMetrics, pikaLabels, pikaGauges)
 	)
 
-	{
-		var proxyGaugeList []prometheus.Collector
-		proxyGaugeCollector := func(metrics map[string]string) {
-			for gaugeName, gaugeHelper := range metrics {
-				gaugeVec := prometheus.NewGaugeVec(
-					prometheus.GaugeOpts{
-						Namespace: proxyNamespace,
-						Name:      gaugeName,
-						Help:      gaugeHelper,
-					}, []string{
-						LabelProductName,
-						LabelAddr,
-					},
-				)
-				proxyGauges[gaugeName] = gaugeVec
-				proxyGaugeList = append(proxyGaugeList, gaugeVec)
+	var (
+		groupLabels = []string{
+			LabelProductName,
+			LabelGroup,
+			LabelPid,
+		}
+		newGroupLabels = func(productName string, gid int, pid int) prometheus.Labels {
+			return prometheus.Labels{
+				LabelProductName: productName,
+				LabelGroup:       strconv.Itoa(gid),
+				LabelPid:         strconv.Itoa(pid),
 			}
 		}
-		proxyGaugeCollector(proxyHealthMetrics)
-		proxyGaugeCollector(proxyMetrics)
-		prometheus.MustRegister(proxyGaugeList...)
-	}
-
-	{
-		var cmdGaugeList []prometheus.Collector
-		cmdGaugeCollector := func(metrics map[string]string) {
-			for gaugeName, gaugeHelper := range metrics {
-				gaugeVec := prometheus.NewGaugeVec(
-					prometheus.GaugeOpts{
-						Namespace: cmdNamespace,
-						Name:      gaugeName,
-						Help:      gaugeHelper,
-					}, []string{
-						LabelProductName,
-						LabelAddr,
-						LabelCmdName,
-					},
-				)
-				cmdGauges[gaugeName] = gaugeVec
-				cmdGaugeList = append(cmdGaugeList, gaugeVec)
-			}
-		}
-
-		cmdGaugeCollector(cmdMetrics)
-		prometheus.MustRegister(cmdGaugeList...)
-	}
-
-	{
-		var redisGaugeList []prometheus.Collector
-		redisGaugeCollector := func(metrics map[string]string) {
-			for gaugeName := range metrics {
-				gaugeVec := prometheus.NewGaugeVec(
-					prometheus.GaugeOpts{
-						Namespace: redisNamespace,
-						Name:      gaugeName,
-						Help:      "",
-					}, []string{
-						LabelProductName,
-						LabelAddr,
-						LabelPid,
-					},
-				)
-				redisGauges[gaugeName] = gaugeVec
-				redisGaugeList = append(redisGaugeList, gaugeVec)
-			}
-		}
-		redisGaugeCollector(redisHealthMetrics)
-		redisGaugeCollector(redisMetrics)
-		prometheus.MustRegister(redisGaugeList...)
-	}
+		groupGauges = make(map[string]*prometheus.GaugeVec)
+		_           = gaugeCollector(NamespaceGroup, map[string]string{
+			"up": "group pika up",
+			"ok": "group pika ok",
+		}, groupLabels, groupGauges)
+		_ = gaugeCollector(NamespaceGroup, pikaMetrics, groupLabels, groupGauges)
+	)
 
 	var (
 		productName = p.Model().ProductName
-		period      = p.config.PrometheusReportPeriod.Duration()
+		period      = math2.MaxDuration(time.Second, p.config.PrometheusReportPeriod.Duration())
+		firstRun    = true
 	)
-
-	period = math2.MaxDuration(time.Second, period)
-
-	firstRun := true
-
 	p.startMetricsReporter(period, func() error {
 		stats, err := p.Stats()
 		if err != nil {
@@ -900,7 +907,7 @@ func (p *Topom) collectPrometheusMetrics() {
 			// Proxy metrics
 			for _, pm := range stats.Proxy.Models {
 				addr := pm.ProxyAddr
-				proxyGaugeUp := proxyGauges["up"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr})
+				proxyGaugeUp := proxyGauges["up"].With(newProxyLabels(productName, addr))
 
 				var ps *ProxyStats
 				if stats.Proxy.Stats == nil {
@@ -934,67 +941,72 @@ func (p *Topom) collectPrometheusMetrics() {
 					}
 					fv := v.Convert(floatType).Float()
 
-					proxyGauges[metric].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr}).Set(fv)
+					proxyGauges[metric].With(newProxyLabels(productName, addr)).Set(fv)
 				}
 
 				if ps != nil && ps.Stats != nil {
 					for _, cmd := range ps.Stats.Ops.Cmd {
-						cmdGauges["user_seconds"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr, LabelCmdName: cmd.OpStr}).Set(float64(cmd.Usecs))
-						cmdGauges["total"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr, LabelCmdName: cmd.OpStr}).Set(float64(cmd.Calls))
-						cmdGauges["failure"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr, LabelCmdName: cmd.OpStr}).Set(float64(cmd.Fails))
-						cmdGauges["pika_error"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr, LabelCmdName: cmd.OpStr}).Set(float64(cmd.RedisErrType))
+						proxyCMDGauges["user_seconds"].With(newProxyCMDLabels(productName, addr, cmd.OpStr)).Set(float64(cmd.Usecs))
+						proxyCMDGauges["total"].With(newProxyCMDLabels(productName, addr, cmd.OpStr)).Set(float64(cmd.Calls))
+						proxyCMDGauges["failure"].With(newProxyCMDLabels(productName, addr, cmd.OpStr)).Set(float64(cmd.Fails))
+						proxyCMDGauges["pika_error"].With(newProxyCMDLabels(productName, addr, cmd.OpStr)).Set(float64(cmd.RedisErrType))
 					}
 				}
-
 			}
 		}
 
 		{
-			// Redis metrics
+			// Pika metrics
 			for _, g := range stats.Group.Models {
-				for i, x := range g.Servers {
-					pid := fmt.Sprintf("%d", i)
+				for pid, x := range g.Servers {
+					gid := g.Id
 					var addr = x.Addr
 
 					rs := stats.Group.Stats[addr]
-					redisGaugeUp := redisGauges["up"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr, LabelPid: pid})
-					redisGaugeOK := redisGauges["ok"].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr, LabelPid: pid})
+					gaugesUp := newGauges(
+						pikaGauges["up"].With(newPikaLabels(productName, addr)),
+						groupGauges["up"].With(newGroupLabels(productName, gid, pid)),
+					)
+					gaugesOK := newGauges(
+						pikaGauges["ok"].With(newPikaLabels(productName, addr)),
+						groupGauges["ok"].With(newGroupLabels(productName, gid, pid)),
+					)
 
 					switch {
 					case rs == nil:
-						redisGaugeUp.Set(0)
-						redisGaugeOK.Set(0)
+						gaugesUp.Set(0)
+						gaugesOK.Set(0)
 					case rs.Error != nil:
-						redisGaugeUp.Set(0)
-						redisGaugeOK.Set(0)
+						gaugesUp.Set(0)
+						gaugesOK.Set(0)
 					case rs.Timeout || rs.Stats == nil:
-						redisGaugeUp.Set(0)
-						redisGaugeOK.Set(0)
+						gaugesUp.Set(0)
+						gaugesOK.Set(0)
 					default:
-						redisGaugeUp.Set(1)
-						if i == 0 {
+						gaugesUp.Set(1)
+						if pid == 0 {
 							if rs.Stats["master_addr"] != "" {
-								redisGaugeOK.Set(0)
+								gaugesOK.Set(0)
 							} else {
-								redisGaugeOK.Set(1)
+								gaugesOK.Set(1)
 							}
 						} else {
 							if rs.Stats["master_addr"] != g.Servers[0].Addr {
-								redisGaugeOK.Set(0)
+								gaugesOK.Set(0)
 							} else {
 								switch rs.Stats["master_link_status"] {
 								default:
-									redisGaugeOK.Set(0)
+									gaugesOK.Set(0)
 								case "up":
-									redisGaugeOK.Set(1)
+									gaugesOK.Set(1)
 								case "down":
-									redisGaugeOK.Set(0)
+									gaugesOK.Set(0)
 								}
 							}
 						}
 					}
 
-					for metric := range redisMetrics {
+					for metric := range pikaMetrics {
 						var val float64
 
 						if rs == nil || rs.Stats == nil {
@@ -1008,14 +1020,14 @@ func (p *Topom) collectPrometheusMetrics() {
 							} else {
 								val, err = strconv.ParseFloat(strVal, 64)
 								if err != nil {
-									log.ErrorErrorf(err, "redis Metric as float64 failed, string value: '%s', metric: '%s'", strVal, metric)
+									log.ErrorErrorf(err, "pika Metric as float64 failed, string value: '%s', metric: '%s'", strVal, metric)
 									val = NanValue
 								}
 							}
 						}
 
-						redisGauges[metric].With(prometheus.Labels{LabelProductName: productName, LabelAddr: addr,
-							LabelPid: pid}).Set(val)
+						pikaGauges[metric].With(newPikaLabels(productName, addr)).Set(val)
+						groupGauges[metric].With(newGroupLabels(productName, gid, pid)).Set(val)
 					}
 				}
 			}
@@ -1027,11 +1039,14 @@ func (p *Topom) collectPrometheusMetrics() {
 		for _, proxyGauge := range proxyGauges {
 			proxyGauge.Reset()
 		}
-		for _, cmdGauge := range cmdGauges {
+		for _, cmdGauge := range proxyCMDGauges {
 			cmdGauge.Reset()
 		}
-		for _, redisGauge := range redisGauges {
-			redisGauge.Reset()
+		for _, pikaGauge := range pikaGauges {
+			pikaGauge.Reset()
+		}
+		for _, groupGauge := range groupGauges {
+			groupGauge.Reset()
 		}
 	})
 }
@@ -1049,12 +1064,17 @@ func (p *Topom) startMetricsReporter(d time.Duration, do func() error, cleanup f
 		}
 		for !p.IsClosed() {
 			<-ticker.C
+			if !p.IsOnline() {
+				delay.SleepWithCancel(p.IsClosed)
+				continue
+			}
 			if err := do(); err != nil {
 				log.WarnErrorf(err, "report metrics failed")
 				delay.SleepWithCancel(p.IsClosed)
 			} else {
 				delay.Reset()
 			}
+
 		}
 	}()
 }
