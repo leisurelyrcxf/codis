@@ -486,7 +486,12 @@ func (s *Proxy) serveProxy() {
 	case <-s.exit.C:
 		log.Warnf("[%p] proxy shutdown", s)
 	case err := <-eh:
-		log.ErrorErrorf(err, "[%p] proxy exit on error", s)
+		select {
+		case <-s.exit.C:
+			log.Warnf("[%p] proxy shutdown", s)
+		default:
+			log.ErrorErrorf(err, "[%p] proxy exit on error", s)
+		}
 	}
 }
 
