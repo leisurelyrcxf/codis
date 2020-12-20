@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/CodisLabs/codis/pkg/utils/errors"
+
 	"github.com/CodisLabs/codis/pkg/utils/log"
 )
 
@@ -14,15 +16,23 @@ var (
 	SlaveRegExp                = regexp.MustCompile(`^slave\[\d+\]$`)
 	MasterSlaveSeparatorRegExp = regexp.MustCompile(`^---(-+)$`)
 	// ErrSlotNotExists error
-	ErrSlotNotExists = fmt.Errorf("slot not exists")
+	ErrSlotNotExists = errors.New("slot not exists")
 	// ErrInvalidSlotInfo invalid slot info
-	ErrInvalidSlotInfo = fmt.Errorf("invalid slot info")
-	// ErrInvalidSlaveReplInfo invalid slave replication info
-	ErrInvalidSlaveReplInfo = fmt.Errorf("invalid slave replication info")
+	ErrInvalidSlotInfo    = errors.New("invalid slot info")
+	genErrInvalidSlotInfo = func(err error) error { return errors.Wrap(ErrInvalidSlotInfo, err) }
+
+	// ErrSlaveReplInfoIsNil const
+	ErrSlaveReplInfoIsNil = errors.New("slave repl info is nil")
 	// ErrInvalidSlotOffset invalid slot offset
-	ErrInvalidSlotOffset = fmt.Errorf("invalid slot offset")
-	// ErrNotSlaveButHaveMasterAddr invalid master info error
-	ErrNotSlaveButHaveMasterAddr = fmt.Errorf("not slave but have master address info")
+	ErrInvalidSlotOffset = errors.New("invalid slot offset")
+	// ErrNotSlaveButHaveMaster invalid master info error
+	ErrNotSlaveButHaveMaster = errors.New("not slave but have master address info")
+	// ErrNotMasterButHaveSlaves invalid master info error
+	ErrNotMasterButHaveSlaves = errors.New("not master but have slaves")
+	// ErrSlaveNoMaster invalid master info error
+	ErrSlaveNoMaster = errors.New("role is slave but doesn't have master addr")
+	// ErrMasterNoSlaves invalid master info error
+	ErrMasterNoSlaves = errors.New("role is master but doesn't have any slaves")
 )
 
 // ParseSlotsInfo parse slots info string
@@ -48,6 +58,7 @@ func ParseSlotInfo(slotInfoString string) (info SlotInfo, err error) {
 		return SlotInfo{}, ErrSlotNotExists
 	}
 
+	var slotConnectedSlaves int
 	info.Slot = -1
 	info.FileNum = math.MaxUint64
 	info.Offset = math.MaxUint64
@@ -63,9 +74,17 @@ func ParseSlotInfo(slotInfoString string) (info SlotInfo, err error) {
 			continue
 		}
 		key, value := strings.TrimSpace(item[:colonIndex]), strings.TrimSpace(item[colonIndex+1:])
-		if info.Role.IsMaster() && SlaveRegExp.MatchString(key) {
+		if SlaveRegExp.MatchString(key) {
+			if !info.Role.IsMaster() {
+				log.Errorf("[parseSlotInfo] not master but have slaves")
+				return info, genErrInvalidSlotInfo(ErrNotMasterButHaveSlaves)
+			}
 			if slaveReplInfo != nil {
 				info.SlaveReplInfos = append(info.SlaveReplInfos, *slaveReplInfo)
+			}
+			if value == "" {
+				log.Errorf("[parseSlotInfo] slave addr is empty")
+				return info, genErrInvalidSlotInfo(errors.New("slave addr is empty"))
 			}
 			slaveReplInfo = &SlaveReplInfo{Addr: value, Lag: math.MaxUint64}
 			continue
@@ -74,7 +93,7 @@ func ParseSlotInfo(slotInfoString string) (info SlotInfo, err error) {
 		case "lag":
 			if slaveReplInfo == nil {
 				log.Errorf("[parseSlotInfo] slave repl info is nil")
-				return info, ErrInvalidSlaveReplInfo
+				return info, genErrInvalidSlotInfo(ErrSlaveReplInfoIsNil)
 			}
 			var lag uint64
 			if lag, err = strconv.ParseUint(value, 10, 64); err != nil {
@@ -85,7 +104,7 @@ func ParseSlotInfo(slotInfoString string) (info SlotInfo, err error) {
 		case "replication_status":
 			if slaveReplInfo == nil {
 				log.Errorf("[parseSlotInfo] slave repl info is nil")
-				return info, ErrInvalidSlaveReplInfo
+				return info, genErrInvalidSlotInfo(ErrSlaveReplInfoIsNil)
 			}
 			slaveReplInfo.Status = ParseSlaveBinlogStatus(value)
 		case "(db0":
@@ -93,7 +112,7 @@ func ParseSlotInfo(slotInfoString string) (info SlotInfo, err error) {
 			slotInfoParts := trimmedSplit(value, ")")
 			if len(slotInfoParts) < 2 { // nolint:gomnd
 				log.Errorf("[parseSlotInfo] expect 2 parts of slotInfo, but met %v", slotInfoParts)
-				return info, ErrInvalidSlotInfo
+				return info, genErrInvalidSlotInfo(errors.New(fmt.Sprintf("len(slotInfoParts) < 2(value: '%s')", value)))
 			}
 			slotS, value := slotInfoParts[0], slotInfoParts[1] // "111", "binlog_offset=0 0,safety_purge=none"
 			var slotInt64 int64
@@ -107,14 +126,14 @@ func ParseSlotInfo(slotInfoString string) (info SlotInfo, err error) {
 			binlogParts := trimmedSplit(binlogS, "=")
 			if len(binlogParts) != 2 { // nolint:gomnd
 				log.Errorf("[parseSlotInfo] expecting 2 parts of binlog_offset, but met %v", binlogParts)
-				return info, ErrInvalidSlotOffset
+				return info, genErrInvalidSlotInfo(ErrInvalidSlotOffset)
 			}
 
 			fileNumOffsetS := binlogParts[1] // "0 0"
 			fileNumOffsetParts := trimmedSplit(fileNumOffsetS, " ")
 			if len(fileNumOffsetParts) != 2 { // nolint:gomnd
 				log.Errorf("[parseSlotInfo] expecting 2 parts of fileNumOffset string, but met %v", fileNumOffsetParts)
-				return info, ErrInvalidSlotOffset
+				return info, genErrInvalidSlotInfo(ErrInvalidSlotOffset)
 			}
 
 			fileNumS, offsetS := fileNumOffsetParts[0], fileNumOffsetParts[1]
@@ -131,7 +150,7 @@ func ParseSlotInfo(slotInfoString string) (info SlotInfo, err error) {
 		case "master":
 			if !info.Role.IsSlave() {
 				log.Errorf("[parseSlotInfo] not slave but have master addr")
-				return info, ErrNotSlaveButHaveMasterAddr
+				return info, genErrInvalidSlotInfo(ErrNotSlaveButHaveMaster)
 			}
 			info.MasterAddr = value
 		case "connected_slaves":
@@ -140,7 +159,7 @@ func ParseSlotInfo(slotInfoString string) (info SlotInfo, err error) {
 				log.Errorf("[parseSlotInfo] parse connected_slaves failed, string: '%s', err: '%v'", value, err)
 				return info, err
 			}
-			info.ConnectedSlaves = int(connectedSlaves)
+			slotConnectedSlaves = int(connectedSlaves)
 		}
 	}
 
@@ -150,13 +169,30 @@ func ParseSlotInfo(slotInfoString string) (info SlotInfo, err error) {
 
 	if info.Slot == -1 {
 		log.Errorf("[parseSlotInfo] can't parse slot")
-		return info, ErrInvalidSlotInfo
+		return info, genErrInvalidSlotInfo(errors.New("info.Slot == -1"))
 	}
 	if info.FileNum == math.MaxUint64 || info.Offset == math.MaxUint64 {
 		log.Errorf("[parseSlotInfo] can't parse slot binlog offset")
-		return info, ErrInvalidSlotOffset
+		return info, genErrInvalidSlotInfo(ErrInvalidSlotOffset)
 	}
-
+	if len(info.SlaveReplInfos) != slotConnectedSlaves {
+		err := errors.Errorf("len(info.SlaveReplInfos)(%d) != slotConnectedSlaves(%d)", len(info.SlaveReplInfos), slotConnectedSlaves)
+		log.Errorf("[parseSlotInfo] %v", err)
+		return info, genErrInvalidSlotInfo(err)
+	}
+	for _, slave := range info.SlaveReplInfos {
+		if slave.Status == SlaveStatusNotSync && slave.Lag != math.MaxUint64 {
+			err := errors.Errorf(" slave.Status == SlaveStatusNotSync && slave.Lag(%d) != math.MaxUint64", slave.Lag)
+			log.Errorf("[parseSlotInfo] %v", err)
+			return info, genErrInvalidSlotInfo(err)
+		}
+	}
+	if info.Role.IsMaster() && len(info.SlaveReplInfos) == 0 {
+		return info, genErrInvalidSlotInfo(ErrMasterNoSlaves)
+	}
+	if info.Role.IsSlave() && info.MasterAddr == "" {
+		return info, genErrInvalidSlotInfo(ErrSlaveNoMaster)
+	}
 	return info, nil
 }
 

@@ -6,6 +6,8 @@ package topom
 import (
 	"testing"
 
+	"github.com/CodisLabs/codis/pkg/utils/pika"
+
 	"github.com/CodisLabs/codis/pkg/models"
 	"github.com/CodisLabs/codis/pkg/utils/assert"
 	"github.com/CodisLabs/codis/pkg/utils/log"
@@ -110,7 +112,7 @@ func TestApiProxy(x *testing.T) {
 func TestSlaveOfMaster(t *testing.T) {
 	apiClient := NewApiClient("localhost:18080")
 	apiClient.SetXAuth("codis-etcd")
-	err := apiClient.SlaveOfMaster("127.0.0.1:56380", []int{4, 1}, false)
+	err := apiClient.SlaveOfMaster("127.0.0.1:56380", []int{4, 1}, pika.SlaveOfNonForce)
 	if err != nil {
 		t.Errorf(err.Error())
 	}
