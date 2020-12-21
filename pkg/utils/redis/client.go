@@ -362,11 +362,15 @@ func (c *Client) SlaveOf(masterAddr string, slot int, force, resharding bool) er
 	}
 
 	args := []interface{}{"slotsslaveof", host, port, slot}
-	slaveOfOpt := getSlaveOfOpt(force, resharding)
+	slaveOfOpt := GetSlaveOfOpt(force, resharding)
 	if slaveOfOpt != "" {
 		args = append(args, slaveOfOpt)
 	}
 	if _, err = c.Do("pkcluster", args...); err != nil {
+		if strings.Contains(err.Error(), "already link to") {
+			// TODO handle this kind of error
+			return nil
+		}
 		log.Errorf("slot-[%02d] %s %s slaveof %s failed: '%v'", slot, c.Addr, slaveOfOpt, masterAddr, err)
 	} else {
 		log.Warnf("slot-[%02d] %s %s slaveof %s succeeded", slot, c.Addr, slaveOfOpt, masterAddr)
@@ -374,7 +378,7 @@ func (c *Client) SlaveOf(masterAddr string, slot int, force, resharding bool) er
 	return err
 }
 
-func getSlaveOfOpt(force, resharding bool) string {
+func GetSlaveOfOpt(force, resharding bool) string {
 	if force {
 		if resharding {
 			return "force_resharding"

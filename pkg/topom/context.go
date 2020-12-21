@@ -267,6 +267,10 @@ func (ctx *context) getGroupSlaves(gid int) []string {
 	return []string{}
 }
 
+func (ctx *context) getGroupMasterSlaves(gid int) []string {
+	return append([]string{ctx.getGroupMaster(gid)}, ctx.getGroupSlaves(gid)...)
+}
+
 func (ctx *context) getGroupSlavesMaster(gid int) []string {
 	return append(ctx.getGroupSlaves(gid), ctx.getGroupMaster(gid))
 }
@@ -337,4 +341,28 @@ func (ctx *context) maxProxyId() (maxId int) {
 		maxId = math2.MaxInt(maxId, p.Id)
 	}
 	return maxId
+}
+
+func (ctx *context) OughtMaster(m *models.SlotMapping, g *models.Group) (string, error) {
+	switch g.Id {
+	case m.GroupId:
+		return g.GetMaster()
+	case m.Action.TargetId:
+		sg, err := ctx.getGroup(m.GroupId)
+		if err != nil {
+			return "", err
+		}
+		switch m.Action.State {
+		case models.ActionPending, models.ActionPreparing:
+			return "", nil
+		case models.ActionWatching, models.ActionPrepared:
+			return sg.GetMaster()
+		case models.ActionMigrating, models.ActionCleanup, models.ActionFinished:
+			return g.GetMaster()
+		default:
+			return "", errors.Errorf("invalid state '%s'", m.Action.State)
+		}
+	default:
+		return "", errors.Errorf("group %d neither source %d nor target %d", g.Id, m.GroupId, m.Action.TargetId)
+	}
 }

@@ -3,6 +3,8 @@
 
 package models
 
+import "github.com/CodisLabs/codis/pkg/utils/errors"
+
 const MaxGroupId = 9999
 
 type Group struct {
@@ -15,6 +17,13 @@ type Group struct {
 	} `json:"promoting"`
 
 	OutOfSync bool `json:"out_of_sync"`
+}
+
+func (g *Group) GetMaster() (string, error) {
+	if len(g.Servers) == 0 {
+		return "", errors.Errorf("no servers in group %d", g.Id)
+	}
+	return g.Servers[0].Addr, nil
 }
 
 type GroupServer struct {

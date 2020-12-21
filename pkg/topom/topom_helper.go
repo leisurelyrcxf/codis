@@ -3,6 +3,7 @@ package topom
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/CodisLabs/codis/pkg/models"
@@ -15,13 +16,34 @@ import (
 )
 
 func (s *Topom) withRedisClient(addr string, do func(*redis.Client) error) error {
-	cli, err := s.action.redisp.GetClient(addr)
-	if err != nil {
-		return err
+	if addr == "" {
+		return errors.Errorf("withRedisClient: addr is empty")
 	}
-	defer s.action.redisp.PutClient(cli)
+	for retryTimes := 0; ; retryTimes++ {
+		poolErr, userErr := func() (error, error) {
+			cli, err := s.action.redisp.GetClient(addr)
+			if err != nil {
+				return errors.Errorf("can't get redis client for %s: %v", addr, err), nil
+			}
+			defer s.action.redisp.PutClient(cli)
 
-	return do(cli)
+			if err := cli.Good(); err != nil {
+				return errors.Errorf("redis client of %s not good: %v", addr, err), nil
+			}
+
+			return nil, do(cli)
+		}()
+
+		if poolErr == nil {
+			return userErr
+		}
+
+		if retryTimes >= 12 {
+			log.Errorf("withRedisClient: %v", poolErr)
+			return poolErr
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 func (s *Topom) getPikaSlotInfo(addr string, slot int) (slotInfo pika.SlotInfo, _ error) {
@@ -36,6 +58,55 @@ func (s *Topom) getPikaSlotsInfo(addr string) (slotsInfo map[int]pika.SlotInfo, 
 		slotsInfo, err = client.PkSlotsInfo()
 		return
 	})
+}
+
+func (s *Topom) getPikasSlotInfo(addrs []string) map[string]map[int]pika.SlotInfo {
+	if len(addrs) == 1 {
+		slotsInfo, err := s.getPikaSlotsInfo(addrs[0])
+		if err != nil {
+			log.Warnf("[getPikasSlotInfo] can't get slots info for pika '%s'", addrs[0])
+			return map[string]map[int]pika.SlotInfo{}
+		}
+		return map[string]map[int]pika.SlotInfo{addrs[0]: slotsInfo}
+	}
+
+	var (
+		m     = make(map[string]map[int]pika.SlotInfo)
+		mutex sync.Mutex
+	)
+
+	if len(addrs) == 0 {
+		return m
+	}
+
+	var addrSet = make(map[string]struct{})
+	for _, addr := range addrs {
+		if addr != "" {
+			addrSet[addr] = struct{}{}
+		}
+	}
+
+	var wg sync.WaitGroup
+	for pikaAddr := range addrSet {
+		wg.Add(1)
+
+		go func(addr string) {
+			defer wg.Done()
+
+			slotInfos, err := s.getPikaSlotsInfo(addr)
+			if err != nil {
+				log.Warnf("[getPikasSlotInfo] can't get slots info for pika '%s', err: '%v'", addr, err)
+				return
+			}
+
+			mutex.Lock()
+			m[addr] = slotInfos
+			mutex.Unlock()
+		}(pikaAddr)
+	}
+	wg.Wait()
+
+	return m
 }
 
 func (s *Topom) addSlotIfNotExists(addr string, slot int) error {
@@ -101,7 +172,7 @@ func (s *Topom) unlinkSlaves(m *models.SlotMapping, masterAddr string, slaveAddr
 			return err
 		}
 		for _, slaveAddr := range slaveAddrs {
-			if _, err := masterSlotInfo.FindSlaveReplInfo(slaveAddr); err != pika.ErrSlaveNotFound {
+			if masterSlotInfo.IsLinked(slaveAddr) {
 				return fmt.Errorf("slot-[%d] detach failed: slave %s found on master %s", m.Id, slaveAddr, masterAddr)
 			}
 		}
@@ -123,14 +194,17 @@ func (s *Topom) detachSlot(m *models.SlotMapping, masterAddr, slaveAddr string) 
 
 	return utils.WithRetry(time.Millisecond*100, time.Second*2, func() error {
 		if _, err := s.getSlaveReplInfo(m, masterAddr, slaveAddr); err != pika.ErrSlaveNotFound {
-			return fmt.Errorf("slot-[%d] detach failed: slave %s found on master %s", m.Id, slaveAddr, masterAddr)
+			if err == nil {
+				err = errors.New("slave still exists on master")
+			}
+			return fmt.Errorf("slot-[%d] detach slave %s of master %s failed: %v", m.Id, slaveAddr, masterAddr, err)
 		}
 		return nil
 	})
 }
 
 func (s *Topom) createReplLink(ctx *context, m *models.SlotMapping) error {
-	return s.linkSlaves(m, ctx.getGroupSlavesMaster(m.Action.TargetId), false)
+	return s.linkSlaves(m, ctx.getGroupMasterSlaves(m.Action.TargetId), false)
 }
 
 func (s *Topom) assureTargetSlavesLinked(ctx *context, m *models.SlotMapping, targetMasterDetached bool) error {
@@ -156,7 +230,7 @@ func (s *Topom) linkSlaves(m *models.SlotMapping, slaveAddrs []string, targetMas
 	}
 
 	for _, slaveAddr := range slaveAddrs {
-		if _, err := masterSlotInfo.FindSlaveReplInfo(slaveAddr); err == nil {
+		if masterSlotInfo.IsLinked(slaveAddr) {
 			continue // already linked
 		}
 
@@ -200,23 +274,13 @@ func (s *Topom) backedUpSlot(ctx *context, m *models.SlotMapping, gap uint64, ta
 		return nil
 	}
 
-	if len(masterSlotInfo.SlaveReplInfos) == 0 {
-		return errors.Errorf("slot-[%d] no linked slave exists on %s master %s", m.Id, masterDesc, masterAddr)
-	}
-
-	if len(masterSlotInfo.SyncedSlaves()) == 0 {
-		return errors.Errorf("slot-[%d] no synced slaves exists on %s master %s", m.Id, masterDesc, masterAddr)
+	if len(masterSlotInfo.LinkedSlaves(targetSlaveAddrs)) == 0 {
+		return errors.Errorf("slot-[%d] no linked slaves among %v exists on %s master %s", m.Id, targetSlaveAddrs, masterDesc, masterAddr)
 	}
 
 	var errs []error
 	for _, targetSlaveAddr := range targetSlaveAddrs {
-		if err := func(slaveAddr string) error {
-			slaveReplInfo, err := masterSlotInfo.FindSlaveReplInfo(slaveAddr)
-			if err != nil {
-				return err
-			}
-			return slaveReplInfo.GapReached(gap)
-		}(targetSlaveAddr); err != nil {
+		if err := masterSlotInfo.GapReached(targetSlaveAddr, gap); err != nil {
 			errs = append(errs, err)
 			continue
 		}
@@ -224,10 +288,10 @@ func (s *Topom) backedUpSlot(ctx *context, m *models.SlotMapping, gap uint64, ta
 	}
 	for _, err := range errs {
 		if strings.Contains(err.Error(), pika.ErrMsgLagNotMatch) {
-			return errors.Errorf("slot-[%d] backup %s, min_lag(%d)>gap(%d)", m.Id, pika.ErrMsgLagNotMatch, masterSlotInfo.GetMinReplLag(), gap)
+			return errors.Errorf("slot-[%d] backup %s, %v min_lag(%d)>gap(%d)", m.Id, pika.ErrMsgLagNotMatch, targetSlaveAddrs, masterSlotInfo.GetMinReplLag(targetSlaveAddrs), gap)
 		}
 	}
-	return errors.Errorf("slot-[%d] backup not ok, min_lag(%d)>gap(%d)", m.Id, masterSlotInfo.GetMinReplLag(), gap)
+	return errors.Errorf("slot-[%d] backup not ok, %v min_lag(%d)>gap(%d)", m.Id, targetSlaveAddrs, masterSlotInfo.GetMinReplLag(targetSlaveAddrs), gap)
 }
 
 func (s *Topom) GetSlotMigrationProgress(ctx *context, m *models.SlotMapping, rollbackTimes int, err error) models.SlotMigrationProgress {

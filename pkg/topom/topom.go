@@ -509,6 +509,12 @@ func (s *Topom) Slots() ([]*models.Slot, error) {
 	return ctx.toSlotSlice(ctx.slots, nil), nil
 }
 
+type SlaveOfMasterJob struct {
+	MasterAddr string
+	Slot       int
+	err        error
+}
+
 func (s *Topom) SlaveOfMaster(addr string, slots []int, force bool) error {
 	if len(slots) == 0 {
 		return nil
@@ -521,15 +527,6 @@ func (s *Topom) SlaveOfMaster(addr string, slots []int, force bool) error {
 	if err != nil {
 		return err
 	}
-	for _, slot := range slots {
-		sm, err := ctx.getSlotMapping(slot)
-		if err != nil {
-			return err
-		}
-		if sm.Action.State != models.ActionNothing {
-			return errors.Errorf("slot %d is migrating", slot)
-		}
-	}
 
 	pid, g, err := ctx.lookupPika(addr)
 	if err != nil {
@@ -539,28 +536,49 @@ func (s *Topom) SlaveOfMaster(addr string, slots []int, force bool) error {
 		return nil
 	}
 
-	masterAddr, slaveAddr := g.Servers[0].Addr, addr
-	masterSlotsInfo, err := s.getPikaSlotsInfo(masterAddr)
-	if err != nil {
-		return errors.Errorf("can't get master %s slots info: '%v'", masterAddr, err)
-	}
+	var (
+		jobs        = make([]SlaveOfMasterJob, 0, len(slots))
+		masterAddrs = make([]string, 0, 2)
+	)
 	for _, slot := range slots {
-		if _, ok := masterSlotsInfo[slot]; !ok {
-			return errors.Errorf("slot %d doesn't exist on master %s", slot, masterAddr)
+		sm, err := ctx.getSlotMapping(slot)
+		if err != nil {
+			return err
 		}
+		j := SlaveOfMasterJob{Slot: slot}
+		j.MasterAddr, j.err = ctx.OughtMaster(sm, g)
+		jobs = append(jobs, j)
+		masterAddrs = append(masterAddrs, j.MasterAddr)
 	}
-	return s.withRedisClient(slaveAddr, func(client *redis.Client) (err error) {
-		for _, slot := range slots {
-			if masterSlotsInfo[slot].IsLinked(slaveAddr) {
-				continue
+
+	master2SlotsInfo := s.getPikasSlotInfo(masterAddrs)
+	for _, j := range jobs {
+		j := j
+		err = errors.Wrap(err, func() error {
+			if j.err != nil {
+				return j.err
 			}
-			if slaveOfErr := client.SlaveOf(masterAddr, slot, force, false); slaveOfErr != nil {
-				log.Errorf("[SlaveOfMaster] %s slave of master %s failed: %v", slaveAddr, masterAddr, slaveOfErr)
-				err = slaveOfErr
+			if j.MasterAddr == "" {
+				return nil
 			}
-		}
-		return
-	})
+			masterSlotsInfo, ok := master2SlotsInfo[j.MasterAddr]
+			if !ok {
+				return errors.Errorf("can't find slots info for master %s", j.MasterAddr)
+			}
+			masterSlotInfo, ok := masterSlotsInfo[j.Slot]
+			if !ok {
+				return errors.Errorf("can't find slot info for slot %d of master %s", j.Slot, j.MasterAddr)
+			}
+			if masterSlotInfo.IsLinked(addr) {
+				return nil
+			}
+			if slaveOfErr := s.slaveOfAsync(j.MasterAddr, addr, j.Slot, force, false); slaveOfErr != nil {
+				return errors.Errorf("%s slot %d %v slaveof %s failed: %v", addr, j.Slot, redis.GetSlaveOfOpt(force, false), j.MasterAddr, slaveOfErr)
+			}
+			return nil
+		}())
+	}
+	return err
 }
 
 func (s *Topom) Reload() error {
