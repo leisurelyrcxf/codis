@@ -222,9 +222,13 @@ func (d *forwardHelper) forward2(s *Slot, r *Request, excludeAddr string) (bc *B
 			}
 			bcAddr := bc.addr
 			r.Retryer = func(r *Request) *BackendConn {
-				bc := d.forward2(s, r, bcAddr)
-				r.Retryer = nil // Retry at most once
-				return bc
+				s.lock.RLock()
+				defer s.lock.RUnlock()
+
+				if s.backend.bc == nil || s.migrate.bc != nil {
+					return nil
+				}
+				return d.forward2(s, r, bcAddr)
 			}
 		}()
 

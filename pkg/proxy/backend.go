@@ -245,6 +245,7 @@ func (bc *BackendConn) selectDatabase(c *redis.Conn, database int) error {
 func (bc *BackendConn) handleRequestError(r *Request, err error) error {
 	if IsBackendConnError(err) && r.Retryer != nil {
 		if nbc := r.Retryer(r); nbc != nil {
+			r.Retryer = nil
 			nbc.PushBackWithoutUpdatingBatch(r)
 			log.Warnf("[handleRequestError] backend %s failed: '%v', retry by re-routing to '%s'", bc.addr, err, nbc.addr)
 			return err
@@ -262,6 +263,7 @@ func (bc *BackendConn) setResponse(r *Request, resp *redis.Resp, err error) erro
 	if r.Batch != nil {
 		r.Batch.Done()
 	}
+	r.Retryer = nil
 	return err
 }
 
