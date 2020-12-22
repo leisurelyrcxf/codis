@@ -19,7 +19,11 @@ var (
 	// ErrCantGetPikaSlotInfo can't get pika slot infos error
 	ErrCantGetPikaSlotInfo = errors.New("can't get pika slot info")
 	// ErrCantGetPikaSlotsInfo can't get pika slot infos error
-	ErrCantGetPikaSlotsInfo = errors.New("can't get pika slots info")
+	ErrCantGetPikaSlotsInfo = errors.New("can't get pika slots info, probably down")
+
+	InvalidSlotInfo = SlotInfo{
+		Slot: -1,
+	}
 
 	InvalidSlaveReplInfo = func(addr string) SlaveReplInfo {
 		return SlaveReplInfo{
@@ -251,7 +255,7 @@ func (ssi SlotsInfo) CheckSlots(slots []int) error {
 func (ssi SlotsInfo) GetSlotInfo(slot int) (SlotInfo, error) {
 	slotInfo, ok := ssi[slot]
 	if !ok {
-		return SlotInfo{}, errors.Errorf("%v: slot: %d", ErrCantGetPikaSlotInfo, slot)
+		return InvalidSlotInfo, errors.Errorf("%v: slot: %d", ErrCantGetPikaSlotInfo, slot)
 	}
 	return slotInfo, nil
 }
@@ -296,6 +300,24 @@ func (ssi SlotsInfo) GetMaxLags(slots []int, slaveAddrs []string) (slaveAddr2Max
 	return slaveAddr2MaxLag, nil
 }
 
+func (ssi SlotsInfo) AllSlotsOf(pred func(SlotInfo) bool) bool {
+	for _, slotInfo := range ssi {
+		if !pred(slotInfo) {
+			return false
+		}
+	}
+	return true
+}
+
+func (ssi SlotsInfo) AnySlotOf(pred func(SlotInfo) bool) bool {
+	for _, slotInfo := range ssi {
+		if pred(slotInfo) {
+			return true
+		}
+	}
+	return false
+}
+
 type AddrsSlotsInfo map[string]map[int]SlotInfo
 
 func (ai AddrsSlotsInfo) GetSlotsInfo(addr string) (SlotsInfo, error) {
@@ -305,6 +327,14 @@ func (ai AddrsSlotsInfo) GetSlotsInfo(addr string) (SlotsInfo, error) {
 	}
 	return slotsInfo, nil
 
+}
+
+func (ai AddrsSlotsInfo) GetSlotInfo(addr string, slot int) (SlotInfo, error) {
+	slotsInfo, err := ai.GetSlotsInfo(addr)
+	if err != nil {
+		return InvalidSlotInfo, err
+	}
+	return slotsInfo.GetSlotInfo(slot)
 }
 
 // Role represents role of pika

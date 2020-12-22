@@ -376,11 +376,11 @@ func (c *Client) Role() (string, error) {
 func (c *Client) SlotInfo(slot int) (pika.SlotInfo, error) {
 	infoReply, err := c.Do("pkcluster", "info", "slot", slot)
 	if err != nil {
-		return pika.SlotInfo{}, err
+		return pika.InvalidSlotInfo, err
 	}
 	infoReplyStr, err := redigo.String(infoReply, nil)
 	if err != nil {
-		return pika.SlotInfo{}, err
+		return pika.InvalidSlotInfo, err
 	}
 	return pika.ParseSlotInfo(infoReplyStr)
 }

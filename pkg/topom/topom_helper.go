@@ -181,13 +181,13 @@ func (s *Topom) getMasterSlotInfo(m *models.SlotMapping, masterAddr string) (pik
 	if masterAddr == m.Action.Info.TargetMaster {
 		return s.getTargetMasterSlotInfo(m)
 	}
-	return pika.SlotInfo{}, fmt.Errorf("master '%s' neither SourceMaster %s nor TargetMaster %s", masterAddr, m.Action.Info.SourceMaster, m.Action.Info.TargetMaster)
+	return pika.InvalidSlotInfo, fmt.Errorf("master '%s' neither SourceMaster %s nor TargetMaster %s", masterAddr, m.Action.Info.SourceMaster, m.Action.Info.TargetMaster)
 }
 
 func (s *Topom) getSourceMasterSlotInfo(m *models.SlotMapping) (pika.SlotInfo, error) {
 	sourceMasterSlotInfo, err := s.action.redisp.GetPikaSlotInfo(m.Action.Info.SourceMaster, m.GetSourceSlot())
 	if err != nil {
-		return pika.SlotInfo{}, errors.Errorf("slot-[%d], can't find source master %s slot info: '%v'", m.Id, m.Action.Info.SourceMaster, err)
+		return pika.InvalidSlotInfo, errors.Errorf("slot-[%d], can't find source master %s slot info: '%v'", m.Id, m.Action.Info.SourceMaster, err)
 	}
 	return sourceMasterSlotInfo, nil
 }
@@ -195,7 +195,7 @@ func (s *Topom) getSourceMasterSlotInfo(m *models.SlotMapping) (pika.SlotInfo, e
 func (s *Topom) getTargetMasterSlotInfo(m *models.SlotMapping) (pika.SlotInfo, error) {
 	targetMasterSlotInfo, err := s.action.redisp.GetPikaSlotInfo(m.Action.Info.TargetMaster, m.Id)
 	if err != nil {
-		return pika.SlotInfo{}, errors.Errorf("slot-[%d], can't find target master %s slot info: '%v'", m.Id, m.Action.Info.TargetMaster, err)
+		return pika.InvalidSlotInfo, errors.Errorf("slot-[%d], can't find target master %s slot info: '%v'", m.Id, m.Action.Info.TargetMaster, err)
 	}
 	return targetMasterSlotInfo, nil
 }
