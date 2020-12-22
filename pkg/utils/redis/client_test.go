@@ -1,7 +1,10 @@
 package redis
 
 import (
+	"fmt"
+	"io/ioutil"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,12 +100,39 @@ func TestSlaveOf(t *testing.T) {
 }
 
 func TestReslaveOf(t *testing.T) {
-	clientMaster, err := NewClient("127.0.0.1:56382", "", time.Second)
+	for i := 0; i < 100; i++ {
+		if !testReslaveOf(t) {
+			t.Errorf("testReslaveOf failed")
+			return
+		}
+		//time.Sleep(time.Second)
+		slaveSSTCount, err := countSSTFile("/usr/local/codis-etcd/pika/pika-56381/db/db0/1/strings/")
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		now := time.Now()
+		masterDumpSSTCount, err := countSSTFile(fmt.Sprintf("/usr/local/codis-etcd/pika/pika-56382/dump/%s/db0/1/strings/", now.Format("20060102")))
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if slaveSSTCount != masterDumpSSTCount {
+			t.Errorf("slaveSSTCount(%d) != masterDumpSSTCount(%d)", slaveSSTCount, masterDumpSSTCount)
+			return
+		}
+		t.Logf("ROUND %d: test ok, continue next round", i)
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func testReslaveOf(t *testing.T) (b bool) {
+	clientMaster, err := NewClient("127.0.0.1:56382", "", 60*time.Second)
 	if err != nil {
 		t.Error(err.Error())
 		return
 	}
-	clientSlave, err := NewClient("127.0.0.1:56381", "", time.Second)
+	clientSlave, err := NewClient("127.0.0.1:56381", "", 60*time.Second)
 	if err != nil {
 		t.Error(err)
 		return
@@ -110,38 +140,48 @@ func TestReslaveOf(t *testing.T) {
 	_ = clientSlave.ReconnectIfNeeded()
 	if err := clientSlave.SlaveOf("no:one", 1, false, false); err != nil {
 		t.Error(err)
+		return
 	}
 	_ = clientSlave.ReconnectIfNeeded()
 	if err := clientSlave.DeleteSlot(1); err != nil {
 		t.Error(err)
+		return
 	}
 	_ = clientSlave.ReconnectIfNeeded()
 	if err := clientSlave.AddSlot(1); err != nil {
 		t.Error(err)
+		return
+	}
+	_ = clientSlave.ReconnectIfNeeded()
+	if err := clientSlave.SlaveOf(clientMaster.Addr, 1, false, false); err != nil {
+		t.Errorf(err.Error())
+		return
 	}
 
 LoopFor:
 	for {
-		_ = clientSlave.ReconnectIfNeeded()
-		err := clientSlave.SlaveOf(clientMaster.Addr, 1, false, false)
-		if err != nil {
-			t.Errorf(err.Error())
-			return
-		}
-
-		timeout := time.After(2 * time.Second)
+		timeout := time.After(2500 * time.Millisecond)
 		for {
 			if slaveOfDone(clientMaster, clientSlave) {
 				t.Logf("slave of done")
-				return
+				return true
 			}
 
 			select {
 			case <-timeout:
-				//time.Sleep(2 * time.Second)
+				_ = clientSlave.ReconnectIfNeeded()
+				if err = clientSlave.SlaveOf("no:one", 1, false, false); err != nil {
+					t.Errorf(err.Error())
+					return
+				}
+				_ = clientSlave.ReconnectIfNeeded()
+				if err := clientSlave.SlaveOf(clientMaster.Addr, 1, false, false); err != nil {
+					t.Errorf(err.Error())
+					return
+				}
 				continue LoopFor
 			default:
-				time.Sleep(200 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 			}
 		}
 	}
@@ -158,4 +198,17 @@ func slaveOfDone(clientMaster, clientSlave *Client) bool {
 		return false
 	}
 	return slaveReplInfo.Status == pika.SlaveStatusBinlogSync && slaveReplInfo.Lag == 0
+}
+
+func countSSTFile(dir string) (count int, _ error) {
+	files, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return 0, err
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f.Name(), ".sst") {
+			count++
+		}
+	}
+	return count, nil
 }

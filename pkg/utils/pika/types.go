@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/CodisLabs/codis/pkg/utils/math2"
+
 	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/log"
 )
@@ -14,6 +16,10 @@ const ErrMsgLagNotMatch = "lag not match"
 
 var (
 	ErrSlaveNotFound = errors.New("slave not found")
+	// ErrCantGetPikaSlotInfo can't get pika slot infos error
+	ErrCantGetPikaSlotInfo = errors.New("can't get pika slot info")
+	// ErrCantGetPikaSlotsInfo can't get pika slot infos error
+	ErrCantGetPikaSlotsInfo = errors.New("can't get pika slots info")
 
 	InvalidSlaveReplInfo = func(addr string) SlaveReplInfo {
 		return SlaveReplInfo{
@@ -173,6 +179,18 @@ func (i SlotInfo) GetMinReplLag(slaveAddrs []string) uint64 {
 	return minLag
 }
 
+func (i SlotInfo) LagUnsafe(slaveAddr string) uint64 {
+	slaveReplInfo, err := i.FindSlaveReplInfo(slaveAddr)
+	if err != nil {
+		log.Errorf("[SlotInfo][LagUnsafe] can't get slave info for slave %s slot %d", slaveAddr, i.Slot)
+		return math.MaxUint64
+	}
+	if slaveReplInfo.Status != SlaveStatusBinlogSync {
+		return math.MaxUint64
+	}
+	return slaveReplInfo.Lag
+}
+
 func (i SlotInfo) GapReached(slaveAddr string, gap uint64) error {
 	slaveReplInfo, err := i.FindSlaveReplInfo(slaveAddr)
 	if err != nil {
@@ -216,6 +234,28 @@ func (ssi SlotsInfo) Slots() (slots []int) {
 	return
 }
 
+func (ssi SlotsInfo) CheckSlot(slot int) error {
+	_, err := ssi.GetSlotInfo(slot)
+	return err
+}
+
+func (ssi SlotsInfo) CheckSlots(slots []int) error {
+	for _, slot := range slots {
+		if _, err := ssi.GetSlotInfo(slot); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (ssi SlotsInfo) GetSlotInfo(slot int) (SlotInfo, error) {
+	slotInfo, ok := ssi[slot]
+	if !ok {
+		return SlotInfo{}, errors.Errorf("%v: slot: %d", ErrCantGetPikaSlotInfo, slot)
+	}
+	return slotInfo, nil
+}
+
 func (ssi SlotsInfo) GetSlaveAddrs() []string {
 	slaveAddrs := make(map[string]struct{})
 	for _, slotInfo := range ssi {
@@ -229,6 +269,42 @@ func (ssi SlotsInfo) GetSlaveAddrs() []string {
 	}
 	sort.Strings(slaveAddrList)
 	return slaveAddrList
+}
+
+func (ssi SlotsInfo) GetMaxLag(slots []int, slaveAddr string) (maxLag uint64, _ error) {
+	for _, slot := range slots {
+		slotInfo, err := ssi.GetSlotInfo(slot)
+		if err != nil {
+			return math.MaxUint64, err
+		}
+		if maxLag = math2.MaxUInt64(maxLag, slotInfo.LagUnsafe(slaveAddr)); maxLag == math.MaxUint64 {
+			return
+		}
+	}
+	return maxLag, nil
+}
+
+func (ssi SlotsInfo) GetMaxLags(slots []int, slaveAddrs []string) (slaveAddr2MaxLag map[string]uint64, _ error) {
+	slaveAddr2MaxLag = map[string]uint64{}
+	for _, slaveAddr := range slaveAddrs {
+		maxLag, err := ssi.GetMaxLag(slots, slaveAddr)
+		if err != nil {
+			return nil, err
+		}
+		slaveAddr2MaxLag[slaveAddr] = maxLag
+	}
+	return slaveAddr2MaxLag, nil
+}
+
+type AddrsSlotsInfo map[string]map[int]SlotInfo
+
+func (ai AddrsSlotsInfo) GetSlotsInfo(addr string) (SlotsInfo, error) {
+	slotsInfo, ok := ai[addr]
+	if !ok {
+		return nil, errors.Errorf("%v: addr:%s", ErrCantGetPikaSlotsInfo, addr)
+	}
+	return slotsInfo, nil
+
 }
 
 // Role represents role of pika
