@@ -5,11 +5,15 @@ package redis
 
 import (
 	"container/list"
+	"context"
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/CodisLabs/codis/pkg/utils"
 
 	"github.com/CodisLabs/codis/pkg/utils/log"
 
@@ -20,6 +24,25 @@ import (
 
 	redigo "github.com/garyburd/redigo/redis"
 )
+
+const (
+	// PikaRemoteNodeError const
+	PikaRemoteNodeError = "connect remote node error"
+	// PikaConcurrentSlotOpError const
+	PikaConcurrentSlotOpError = "Slot in syncing or a change operation is under way, retry later"
+)
+
+func IsRetryablePikaSlotError(err error) bool {
+	errMsg := err.Error()
+	return strings.Contains(errMsg, PikaRemoteNodeError) || strings.Contains(errMsg, PikaConcurrentSlotOpError)
+}
+
+func DoPikaSlotOp(f func() (interface{}, error)) (v interface{}, _ error) {
+	return v, utils.WithRetryEx(time.Second, time.Second*3, func() (err error) {
+		v, err = f()
+		return
+	}, IsRetryablePikaSlotError)
+}
 
 type Client struct {
 	conn redigo.Conn
@@ -34,6 +57,8 @@ type Client struct {
 	Pipeline struct {
 		Send, Recv uint64
 	}
+
+	closed bool
 }
 
 func NewClientNoAuth(addr string, timeout time.Duration) (*Client, error) {
@@ -56,6 +81,7 @@ func NewClient(addr string, auth string, timeout time.Duration) (*Client, error)
 }
 
 func (c *Client) Close() error {
+	c.closed = true
 	return c.conn.Close()
 }
 
@@ -83,6 +109,23 @@ func (c *Client) Do(cmd string, args ...interface{}) (interface{}, error) {
 		return nil, errors.Trace(err)
 	}
 	return r, nil
+}
+
+func (c *Client) ReconnectIfNeeded() error {
+	if !c.closed {
+		return nil
+	}
+	conn, err := redigo.Dial("tcp", c.Addr, []redigo.DialOption{
+		redigo.DialConnectTimeout(math2.MinDuration(time.Second, c.Timeout)),
+		redigo.DialPassword(c.Auth),
+		redigo.DialReadTimeout(c.Timeout), redigo.DialWriteTimeout(c.Timeout),
+	}...)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	c.conn = conn
+	c.LastUse = time.Now()
+	return nil
 }
 
 func (c *Client) Good() error {
@@ -354,28 +397,100 @@ func (c *Client) PkSlotsInfo() (map[int]pika.SlotInfo, error) {
 	return pika.ParseSlotsInfo(infoReplyStr)
 }
 
+func (c *Client) BecomeMaster(slot int) error {
+	err, _ := c.slaveOfSlotsInternal("no:one", []int{slot}, strconv.Itoa(slot), false, false, true)
+	return err
+}
+
 func (c *Client) SlaveOf(masterAddr string, slot int, force, resharding bool) error {
+	err, _ := c.slaveOfSlotsInternal(masterAddr, []int{slot}, strconv.Itoa(slot), force, resharding, true)
+	return err
+}
+
+func (c *Client) SlaveOfSlots(masterAddr string, slots pika.SlotGroup, force bool) error {
+	err, _ := c.slaveOfSlotsInternal(masterAddr, slots.ToList(), slots.String(), force, false, true)
+	return err
+}
+
+func (c *Client) SlaveOfAllSlots(masterAddr string, slaveSlots []int, force bool) error {
+	err, _ := c.slaveOfSlotsInternal(masterAddr, slaveSlots, "all", force, false, true)
+	return err
+}
+
+func (c *Client) slaveOfSlotsInternal(masterAddr string, slots []int, slotsDesc string, force, resharding bool, logging bool) (err error, slavedOfSlots []int) {
 	host, port, err := net.SplitHostPort(masterAddr)
 	if err != nil {
-		log.Warnf("[SlaveOf] split host %s err: '%v'", masterAddr, err)
-		return err
+		log.Warnf("[slaveOfSlotsInternal] split host %s err: '%v'", masterAddr, err)
+		return err, nil
 	}
 
-	args := []interface{}{"slotsslaveof", host, port, slot}
+	args := []interface{}{"slotsslaveof", host, port, slotsDesc}
 	slaveOfOpt := GetSlaveOfOpt(force, resharding)
 	if slaveOfOpt != "" {
 		args = append(args, slaveOfOpt)
 	}
-	if _, err = c.Do("pkcluster", args...); err != nil {
-		if strings.Contains(err.Error(), "already link to") {
-			// TODO handle this kind of error
-			return nil
+
+	logf := func(err error, slavedOfSlots []int, desc string) {
+		if !logging {
+			return
 		}
-		log.Errorf("slot-[%02d] %s %s slaveof %s failed: '%v'", slot, c.Addr, slaveOfOpt, masterAddr, err)
-	} else {
-		log.Warnf("slot-[%02d] %s %s slaveof %s succeeded", slot, c.Addr, slaveOfOpt, masterAddr)
+		if err != nil {
+			log.Errorf("[slaveOfSlotsInternal] slots-[%s] %s %s slaveof %s failed: %v, newly slaveof-ed slots: %v", slotsDesc, c.Addr, slaveOfOpt, masterAddr, err, pika.Slots(slavedOfSlots))
+		} else if desc != "" {
+			log.Warnf("[slaveOfSlotsInternal] slots-[%s] %s %s slaveof %s: %s", slotsDesc, c.Addr, slaveOfOpt, masterAddr, desc)
+		} else if len(slavedOfSlots) > 0 {
+			log.Warnf("[slaveOfSlotsInternal] slots-[%s] %s %s slaveof %s succeeded, newly slaveof-ed slots: %v", slotsDesc, c.Addr, slaveOfOpt, masterAddr, pika.Slots(slavedOfSlots))
+		}
 	}
-	return err
+	defer func() {
+		logf(err, slavedOfSlots, "")
+	}()
+
+	if _, err = DoPikaSlotOp(func() (interface{}, error) {
+		return c.Do("pkcluster", args...)
+	}); err == nil {
+		return nil, slots
+	}
+	if !strings.Contains(err.Error(), pika.ErrMsgSlotAlreadyLinked) {
+		return err, []int{}
+	}
+
+	linkedSlots, parseErr := pika.ParseAlreadyLinkedErrMsg(err.Error())
+	if parseErr != nil {
+		return errors.Wrap(err, parseErr), []int{}
+	}
+	connectedSlots, nonConnectedSlots := linkedSlots.SplitConnectedAndNonConnected()
+	if len(nonConnectedSlots) > 0 {
+		logf(nil, nil, fmt.Sprintf("slaveof no:one for linked but non-connected slots %v", pika.Slots(nonConnectedSlots)))
+		for _, sg := range pika.GroupedSlots(nonConnectedSlots) {
+			if connErr := c.ReconnectIfNeeded(); connErr != nil {
+				return errors.Wrap(err, connErr), []int{}
+			}
+			if slaveOfErr, _ := c.slaveOfSlotsInternal("no:one", sg.ToList(), sg.String(), false, false, true); slaveOfErr != nil {
+				return slaveOfErr, []int{}
+			}
+		}
+	}
+
+	if len(connectedSlots) > 0 {
+		logf(nil, nil, fmt.Sprintf("skip already connected slots %v", pika.Slots(connectedSlots)))
+	}
+	newSlotGroups := pika.GroupedSlotsExcluding(slots, connectedSlots)
+	if pika.SlotGroups(newSlotGroups).SlotCount() >= len(slots) && len(nonConnectedSlots) == 0 {
+		return errors.Wrap(err, errors.Errorf("impossible: pika.SlotGroups(newSlotGroups).SlotCount() >= len(slots) && len(nonConnectedSlots) == 0, newSlotGroups: %v, slots: %v", newSlotGroups, pika.Slots(slots))), []int{}
+	}
+	if resharding && len(newSlotGroups) > 0 {
+		return errors.Wrap(err, errors.Errorf("impossible: resharding && len(newSlotGroups) > 0, newSlotGroups: %v", newSlotGroups)), []int{}
+	}
+	err, slavedOfSlots = nil, make([]int, 0, len(newSlotGroups))
+	for _, sg := range newSlotGroups {
+		if connErr := c.ReconnectIfNeeded(); connErr != nil {
+			return errors.Wrap(err, connErr), slavedOfSlots
+		}
+		slaveOfErr, partialSlavedOfSlots := c.slaveOfSlotsInternal(masterAddr, sg.ToList(), sg.String(), force, false, false)
+		err, slavedOfSlots = errors.Wrap(err, slaveOfErr), append(slavedOfSlots, partialSlavedOfSlots...)
+	}
+	return err, slavedOfSlots
 }
 
 func GetSlaveOfOpt(force, resharding bool) string {
@@ -408,12 +523,16 @@ func (c *Client) GetMaxSlotNum() (int, error) {
 }
 
 func (c *Client) AddSlot(slot int) error {
-	_, err := c.Do("pkcluster", "addslots", slot)
+	_, err := DoPikaSlotOp(func() (interface{}, error) {
+		return c.Do("pkcluster", "addslots", slot)
+	})
 	return err
 }
 
 func (c *Client) DeleteSlot(slot int) error {
-	_, err := c.Do("pkcluster", "delslots", slot)
+	_, err := DoPikaSlotOp(func() (interface{}, error) {
+		return c.Do("pkcluster", "delslots", slot)
+	})
 	return err
 }
 
@@ -559,6 +678,179 @@ func (p *Pool) InfoFull(addr string) (_ map[string]string, err error) {
 	}
 	defer p.PutClient(c)
 	return c.InfoFull()
+}
+
+func (p *Pool) WithRedisClient(addr string, do func(*Client) error) error {
+	if addr == "" {
+		return errors.Errorf("WithRedisClient: addr is empty")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+
+	for {
+		poolErr, userErr := func() (error, error) {
+			cli, err := p.GetClient(addr)
+			if err != nil {
+				return errors.Errorf("can't get redis client for %s: %v", addr, err), nil
+			}
+			defer p.PutClient(cli)
+
+			if err := cli.Good(); err != nil {
+				return errors.Errorf("redis client of %s not good: %v", addr, err), nil
+			}
+
+			return nil, do(cli)
+		}()
+
+		if poolErr == nil {
+			return userErr
+		}
+
+		select {
+		case <-ctx.Done():
+			log.Errorf("WithRedisClient: %v", poolErr)
+			return poolErr
+		default:
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+}
+
+func (p *Pool) GetPikaSlotInfo(addr string, slot int) (slotInfo pika.SlotInfo, _ error) {
+	return slotInfo, p.WithRedisClient(addr, func(client *Client) (err error) {
+		slotInfo, err = client.SlotInfo(slot)
+		return
+	})
+}
+
+func (p *Pool) GetPikaSlotsInfo(addr string) (slotsInfo map[int]pika.SlotInfo, _ error) {
+	return slotsInfo, p.WithRedisClient(addr, func(client *Client) (err error) {
+		slotsInfo, err = client.PkSlotsInfo()
+		return
+	})
+}
+
+func (p *Pool) GetPikasSlotInfo(addrs []string) map[string]map[int]pika.SlotInfo {
+	if len(addrs) == 1 {
+		slotsInfo, err := p.GetPikaSlotsInfo(addrs[0])
+		if err != nil {
+			log.Warnf("[getPikasSlotInfo] can't get slots info for pika '%s'", addrs[0])
+			return map[string]map[int]pika.SlotInfo{}
+		}
+		return map[string]map[int]pika.SlotInfo{addrs[0]: slotsInfo}
+	}
+
+	var (
+		m     = make(map[string]map[int]pika.SlotInfo)
+		mutex sync.Mutex
+	)
+
+	if len(addrs) == 0 {
+		return m
+	}
+
+	var addrSet = make(map[string]struct{})
+	for _, addr := range addrs {
+		if addr != "" {
+			addrSet[addr] = struct{}{}
+		}
+	}
+
+	var wg sync.WaitGroup
+	for pikaAddr := range addrSet {
+		wg.Add(1)
+
+		go func(addr string) {
+			defer wg.Done()
+
+			slotInfos, err := p.GetPikaSlotsInfo(addr)
+			if err != nil {
+				log.Warnf("[getPikasSlotInfo] can't get slots info for pika '%s', err: '%v'", addr, err)
+				return
+			}
+
+			mutex.Lock()
+			m[addr] = slotInfos
+			mutex.Unlock()
+		}(pikaAddr)
+	}
+	wg.Wait()
+
+	return m
+}
+
+func (p *Pool) AddSlotIfNotExists(addr string, slot int) error {
+	err := p.WithRedisClient(addr, func(client *Client) error {
+		return client.AddSlot(slot)
+	})
+	if err == nil {
+		return nil
+	}
+	if _, getErr := p.GetPikaSlotInfo(addr, slot); getErr == nil {
+		return nil // error pruning
+	}
+	return err
+}
+
+// Delete slot if exists
+func (p *Pool) CleanSlotIfExists(addr string, slot int) error {
+	err := p.WithRedisClient(addr, func(client *Client) error {
+		return client.DeleteSlot(slot)
+	})
+	if err == nil {
+		return nil
+	}
+	if _, getErr := p.GetPikaSlotInfo(addr, slot); getErr == pika.ErrSlotNotExists {
+		return nil // error pruning
+	}
+	return err
+}
+
+func (p *Pool) SlaveOfAsync(masterAddr, slaveAddr string, slot int, force, resharding bool) error {
+	return p.WithRedisClient(slaveAddr, func(client *Client) error {
+		return client.SlaveOf(masterAddr, slot, force, resharding)
+	})
+}
+
+func (p *Pool) BecomeMaster(slaveAddr string, slot int) error {
+	return p.WithRedisClient(slaveAddr, func(client *Client) error {
+		return client.BecomeMaster(slot)
+	})
+}
+
+func (p *Pool) UnlinkAllSlaves(masterAddr string, slot int) error {
+	masterSlotInfo, err := p.GetPikaSlotInfo(masterAddr, slot)
+	if err != nil {
+		return err
+	}
+	return p.UnlinkSlaves(masterAddr, masterSlotInfo.SlaveAddrs(), slot, func(masterAddr string, slot int) (pika.SlotInfo, error) {
+		return p.GetPikaSlotInfo(masterAddr, slot)
+	})
+}
+
+func (p *Pool) UnlinkSlaves(masterAddr string, slaveAddrs []string, slot int,
+	masterSlotInfoGetter func(masterAddr string, slot int) (pika.SlotInfo, error)) (err error) {
+	for _, slaveAddr := range slaveAddrs {
+		if err = p.BecomeMaster(slaveAddr, slot); err != nil {
+			return err
+		}
+	}
+	if err = utils.WithRetry(time.Millisecond*100, time.Second*2, func() error {
+		masterSlotInfo, err := masterSlotInfoGetter(masterAddr, slot)
+		if err != nil {
+			return err
+		}
+		for _, slaveAddr := range slaveAddrs {
+			if masterSlotInfo.IsSlaveLinked(slaveAddr) {
+				return fmt.Errorf("slot-[%d] detach failed: slave %s found on master %s", slot, slaveAddr, masterAddr)
+			}
+		}
+		return nil
+	}); err != nil {
+		log.Errorf("[UnlinkSlaves] slot-[%d] detach failed: '%v'", slot, err)
+	}
+	return err
 }
 
 type InfoCache struct {

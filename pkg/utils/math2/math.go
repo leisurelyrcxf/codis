@@ -65,3 +65,15 @@ func MinMaxDuration(v, min, max time.Duration) time.Duration {
 	}
 	panic(fmt.Sprintf("min = %s, max = %s", min, max))
 }
+
+func EqualInts(a1, a2 []int) bool {
+	if len(a1) != len(a2) {
+		return false
+	}
+	for idx, a1Val := range a1 {
+		if a1Val != a2[idx] {
+			return false
+		}
+	}
+	return true
+}

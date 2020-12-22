@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CodisLabs/codis/pkg/utils/pika"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -887,7 +889,11 @@ func (s *apiServer) SlaveOfMaster(slotMappings []*models.SlotMapping, params mar
 	if err != nil {
 		return rpc.ApiResponseError(err)
 	}
-	if err := s.topom.SlaveOfMaster(addr, toSlots(slotMappings), int2Bool(force)); err != nil {
+	forceOpt, err := pika.ParseSlaveOfForceOption(force)
+	if err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	if err := s.topom.SlaveOfMaster(addr, toSlots(slotMappings), forceOpt); err != nil {
 		return rpc.ApiResponseError(err)
 	}
 	return rpc.ApiResponseJson("OK")
@@ -1173,8 +1179,14 @@ func (c *ApiClient) SlotsRebalance(confirm bool) (map[int]int, error) {
 	}
 }
 
-func (c *ApiClient) SlaveOfMaster(addr string, slots []int, force bool) error {
-	url := c.encodeURL("/api/topom/slots/slave-of-master/%s/%s/%d", c.xauth, addr, bool2Int(force))
+func (c *ApiClient) SlaveOfMaster(addr string, slots []int, forceOpt pika.SlaveOfForceOption) error {
+	if addr == "" {
+		return errors.Errorf("master addr is empty")
+	}
+	if len(slots) == 0 {
+		return nil
+	}
+	url := c.encodeURL("/api/topom/slots/slave-of-master/%s/%s/%d", c.xauth, addr, int(forceOpt))
 	return rpc.ApiPutJson(url, toSlotMappings(slots), nil)
 }
 

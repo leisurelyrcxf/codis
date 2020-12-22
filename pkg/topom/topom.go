@@ -509,13 +509,7 @@ func (s *Topom) Slots() ([]*models.Slot, error) {
 	return ctx.toSlotSlice(ctx.slots, nil), nil
 }
 
-type SlaveOfMasterJob struct {
-	MasterAddr string
-	Slot       int
-	err        error
-}
-
-func (s *Topom) SlaveOfMaster(addr string, slots []int, force bool) error {
+func (s *Topom) SlaveOfMaster(addr string, slots []int, slaveOfForceOpt pika.SlaveOfForceOption) error {
 	if len(slots) == 0 {
 		return nil
 	}
@@ -537,7 +531,7 @@ func (s *Topom) SlaveOfMaster(addr string, slots []int, force bool) error {
 	}
 
 	var (
-		jobs        = make([]SlaveOfMasterJob, 0, len(slots))
+		jobs        = make([]*pika.SlaveOfMasterJob, 0, len(slots))
 		masterAddrs = make([]string, 0, 2)
 	)
 	for _, slot := range slots {
@@ -545,40 +539,107 @@ func (s *Topom) SlaveOfMaster(addr string, slots []int, force bool) error {
 		if err != nil {
 			return err
 		}
-		j := SlaveOfMasterJob{Slot: slot}
-		j.MasterAddr, j.err = ctx.OughtMaster(sm, g)
+		j := pika.NewSlaveOfMasterJob("", slot, slaveOfForceOpt)
+		j.MasterAddr, j.Err = ctx.OughtMaster(sm, g)
 		jobs = append(jobs, j)
 		masterAddrs = append(masterAddrs, j.MasterAddr)
 	}
 
-	master2SlotsInfo := s.getPikasSlotInfo(masterAddrs)
-	for _, j := range jobs {
-		j := j
-		err = errors.Wrap(err, func() error {
-			if j.err != nil {
-				return j.err
-			}
-			if j.MasterAddr == "" {
-				return nil
-			}
-			masterSlotsInfo, ok := master2SlotsInfo[j.MasterAddr]
-			if !ok {
-				return errors.Errorf("can't find slots info for master %s", j.MasterAddr)
-			}
-			masterSlotInfo, ok := masterSlotsInfo[j.Slot]
-			if !ok {
-				return errors.Errorf("can't find slot info for slot %d of master %s", j.Slot, j.MasterAddr)
-			}
-			if masterSlotInfo.IsLinked(addr) {
-				return nil
-			}
-			if slaveOfErr := s.slaveOfAsync(j.MasterAddr, addr, j.Slot, force, false); slaveOfErr != nil {
-				return errors.Errorf("%s slot %d %v slaveof %s failed: %v", addr, j.Slot, redis.GetSlaveOfOpt(force, false), j.MasterAddr, slaveOfErr)
-			}
-			return nil
-		}())
+	addr2SlotsInfo := s.action.redisp.GetPikasSlotInfo(append(masterAddrs, addr))
+	slaveSlotsInfo, ok := addr2SlotsInfo[addr]
+	if !ok {
+		return errors.Errorf("can't get slave %s slots info", addr)
 	}
-	return err
+
+	for _, j := range jobs {
+		if j.Err != nil {
+			continue
+		}
+		if j.MasterAddr == "" {
+			j.Skip = true
+			continue
+		}
+		masterSlotsInfo, ok := addr2SlotsInfo[j.MasterAddr]
+		if !ok {
+			j.Err = errors.Errorf("slot-[%d] can't find slots info of master %s", j.Slot, j.MasterAddr)
+			continue
+		}
+		masterSlotInfo, ok := masterSlotsInfo[j.Slot]
+		if !ok {
+			j.Err = errors.Errorf("slot-[%d] can't find slot info of master %s", j.Slot, j.MasterAddr)
+			continue
+		}
+		if masterSlotInfo.MasterAddr != "" {
+			j.Err = errors.Errorf("slot-[%d] supposed master %s 's master %s is not empty", j.Slot, j.MasterAddr, masterSlotInfo.MasterAddr)
+			continue
+		}
+
+		slaveSlotInfo, ok := slaveSlotsInfo[j.Slot]
+		if !ok {
+			j.Err = errors.Errorf("slot-[%d] can't find slot info of slave %s", j.Slot, addr)
+			continue
+		}
+		if slaveSlotInfo.IsLinkedToMaster(j.MasterAddr) {
+			j.Skip = true
+			continue
+		}
+		if slaveSlotInfo.HasSlaves() {
+			if err := s.action.redisp.UnlinkAllSlaves(addr, j.Slot); err != nil {
+				j.Err = errors.Wrap(errors.Errorf("slot-[%d] supposed slave %s 's slaves %v are not empty", j.Slot, addr, slaveSlotInfo.SlaveAddrs()), err)
+				continue
+			}
+			slaveSlotsInfo[j.Slot] = slaveSlotsInfo[j.Slot].UnlinkSlaves()
+		}
+
+		switch j.ForceOption {
+		case pika.SlaveOfNonForce:
+			j.Force = false
+		case pika.SlaveOfMayForce:
+			if ret := slaveSlotInfo.BinlogOffset.Compare(&masterSlotInfo.BinlogOffset); ret > 0 {
+				j.Force = true
+			} else {
+				j.Force = false
+			}
+		case pika.SlaveOfForceForce:
+			j.Force = true
+		default:
+			return errors.Errorf("%v: %d", pika.ErrInvalidSlaveOfForceOption, int(j.ForceOption))
+		}
+	}
+
+	okJobs := make([]*pika.SlaveOfMasterJob, 0, len(jobs))
+	for _, j := range jobs {
+		if j.Err != nil {
+			err = errors.Wrap(err, j.Err)
+			continue
+		}
+		if j.Skip {
+			continue
+		}
+		okJobs = append(okJobs, j)
+	}
+
+	slaveSlots := pika.SlotsInfo(slaveSlotsInfo).Slots()
+	groupedJobs := pika.SlaveOfMasterJobs(okJobs).GroupJobs()
+	return s.action.redisp.WithRedisClient(addr, func(client *redis.Client) (err error) {
+		for k, g := range groupedJobs {
+			err = errors.Wrap(err, func(k pika.SlaveOfMasterJobKey, g pika.SlaveOfMasterJobs) error {
+				jbgSlots := g.Slots()
+				if math2.EqualInts(slaveSlots, jbgSlots) {
+					return client.SlaveOfAllSlots(k.MasterAddr, jbgSlots, k.Force)
+				}
+				var slaveOfErr error
+				for _, sg := range pika.GroupedSlots(jbgSlots) {
+					if connErr := client.ReconnectIfNeeded(); connErr != nil {
+						return errors.Wrap(slaveOfErr, connErr)
+					}
+					slaveOfErr = errors.Wrap(slaveOfErr, client.SlaveOfSlots(k.MasterAddr, sg, k.Force))
+				}
+				return slaveOfErr
+			}(k, g))
+		}
+		return err
+	})
 }
 
 func (s *Topom) Reload() error {

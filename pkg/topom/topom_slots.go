@@ -131,7 +131,7 @@ func (s *Topom) SlotCreateActionPlan(plan map[int]int) error {
 			go func(t *Task) {
 				defer wg.Done()
 
-				t.Err = s.withRedisClient(t.Addr, func(client *redis.Client) (err error) {
+				t.Err = s.action.redisp.WithRedisClient(t.Addr, func(client *redis.Client) (err error) {
 					t.MaxSlotNum, err = client.GetMaxSlotNum()
 					return
 				})

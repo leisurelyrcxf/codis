@@ -100,8 +100,7 @@ type SlotInfo struct {
 	MasterAddr string
 
 	// If Role.IsMaster()
-	ConnectedSlaves int
-	SlaveReplInfos  []SlaveReplInfo
+	SlaveReplInfos []SlaveReplInfo
 }
 
 // NewSlotInfo generates slot info for newly created slot.
@@ -111,7 +110,14 @@ func NewSlotInfo(slot int) SlotInfo {
 
 // HasSlaves return if this slot has slaves
 func (i SlotInfo) HasSlaves() bool {
-	return i.ConnectedSlaves > 0 || len(i.SlaveReplInfos) > 0
+	return len(i.SlaveReplInfos) > 0
+}
+
+func (i SlotInfo) SlaveAddrs() (slaveAddrs []string) {
+	for _, slaveReplInfo := range i.SlaveReplInfos {
+		slaveAddrs = append(slaveAddrs, slaveReplInfo.Addr)
+	}
+	return slaveAddrs
 }
 
 // FindSlaveReplInfo find slave repl info
@@ -125,15 +131,29 @@ func (i SlotInfo) FindSlaveReplInfo(slaveAddr string) (SlaveReplInfo, error) {
 	return InvalidSlaveReplInfo(slaveAddr), ErrSlaveNotFound
 }
 
-func (i SlotInfo) IsLinked(slaveAddr string) bool {
+func (i SlotInfo) IsSlaveLinked(slaveAddr string) bool {
 	_, err := i.FindSlaveReplInfo(slaveAddr)
 	return err == nil
 }
 
+func (i SlotInfo) IsLinkedToMaster(masterAddr string) bool {
+	return i.MasterAddr == masterAddr
+}
+
 func (i SlotInfo) LinkedSlaves(slaveAddrs []string) (linkedSlaves []string) {
 	for _, slave := range slaveAddrs {
-		if i.IsLinked(slave) {
+		if i.IsSlaveLinked(slave) {
 			linkedSlaves = append(linkedSlaves, slave)
+		}
+	}
+	return
+}
+
+// BinlogSyncedSlaves returns slaves which are in normal sync state to master
+func (i SlotInfo) BinlogSyncedSlaves() (okSlaves []SlaveReplInfo) {
+	for _, slave := range i.SlaveReplInfos {
+		if slave.IsBinlogSynced() {
+			okSlaves = append(okSlaves, slave)
 		}
 	}
 	return
@@ -167,28 +187,34 @@ func (i SlotInfo) GapReached(slaveAddr string, gap uint64) error {
 // BecomeMaster generates new proper pika slot info after becoming master. TODO test against this
 func (i SlotInfo) BecomeMaster() SlotInfo {
 	return SlotInfo{
-		Slot:            i.Slot,
-		BinlogOffset:    i.BinlogOffset,
-		Role:            i.Role.DeSlave(),
-		MasterAddr:      "",
-		ConnectedSlaves: i.ConnectedSlaves,
-		SlaveReplInfos:  i.SlaveReplInfos,
+		Slot:           i.Slot,
+		BinlogOffset:   i.BinlogOffset,
+		Role:           i.Role.DeSlave(),
+		MasterAddr:     "",
+		SlaveReplInfos: i.SlaveReplInfos,
 	}
 }
 
 // UnlinkSlaves generates new proper pika slot info after slaves unlinked. TODO test against this
 func (i SlotInfo) UnlinkSlaves() SlotInfo {
 	return SlotInfo{
-		Slot:            i.Slot,
-		BinlogOffset:    i.BinlogOffset,
-		Role:            i.Role.DeMaster(),
-		MasterAddr:      i.MasterAddr,
-		ConnectedSlaves: 0,
-		SlaveReplInfos:  nil,
+		Slot:           i.Slot,
+		BinlogOffset:   i.BinlogOffset,
+		Role:           i.Role.DeMaster(),
+		MasterAddr:     i.MasterAddr,
+		SlaveReplInfos: nil,
 	}
 }
 
 type SlotsInfo map[int]SlotInfo
+
+func (ssi SlotsInfo) Slots() (slots []int) {
+	for s := range ssi {
+		slots = append(slots, s)
+	}
+	sort.Ints(slots)
+	return
+}
 
 func (ssi SlotsInfo) GetSlaveAddrs() []string {
 	slaveAddrs := make(map[string]struct{})
