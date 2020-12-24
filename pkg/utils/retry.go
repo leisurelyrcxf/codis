@@ -4,28 +4,16 @@ import (
 	"context"
 	"time"
 
+	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/log"
 )
 
-func WithRetry(interval, timeout time.Duration, f func() error) error {
-	var start = time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+var RetryAnyError = func(error) bool {
+	return true
+}
 
-	for {
-		err := f()
-		if err == nil {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			log.Errorf("[WithRetry] failed after retrying for %s, last error: '%v'", time.Since(start), err)
-			return err
-		default:
-			log.Warnf("[WithRetry] run failed with error '%v', retrying...", err)
-			time.Sleep(interval)
-		}
-	}
+func WithRetry(interval, timeout time.Duration, f func() error) error {
+	return WithRetryEx(interval, timeout, f, RetryAnyError)
 }
 
 func WithRetryEx(interval, timeout time.Duration, f func() error, isRetryableErr func(error) bool) error {
@@ -36,14 +24,17 @@ func WithRetryEx(interval, timeout time.Duration, f func() error, isRetryableErr
 	for {
 		err := f()
 		if err == nil || !isRetryableErr(err) {
+			if err != nil {
+				log.Errorf("[WithRetryEx] returned non-retryable error: '%v'", errors.Trace(err))
+			}
 			return err
 		}
 		select {
 		case <-ctx.Done():
-			log.Errorf("[WithRetry] failed after retrying for %s, last error: '%v'", time.Since(start), err)
+			log.Errorf("[WithRetryEx] failed after retrying for %s, last error: '%v'", time.Since(start), errors.Trace(err))
 			return err
 		default:
-			log.Warnf("[WithRetry] run failed with error '%v', retrying...", err)
+			log.Warnf("[WithRetryEx] run failed with error '%v', retrying in %s...", err, interval)
 			time.Sleep(interval)
 		}
 	}

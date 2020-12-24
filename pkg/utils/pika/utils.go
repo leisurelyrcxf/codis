@@ -55,7 +55,7 @@ func ParseSlotsInfo(slotsInfoString string) (slotInfos map[int]SlotInfo, err err
 // "(db0:0) binlog_offset=0 0,safety_purge=none\r\n\r\n(db0:1) binlog_offset=0 0,safety_purge=none\r\n  Role: Slave\r\n  master: 10.213.20.33:9200"
 func ParseSlotInfo(slotInfoString string) (info SlotInfo, err error) {
 	if strings.TrimSpace(slotInfoString) == "" {
-		return SlotInfo{}, ErrSlotNotExists
+		return InvalidSlotInfo, ErrSlotNotExists
 	}
 
 	var slotConnectedSlaves int
