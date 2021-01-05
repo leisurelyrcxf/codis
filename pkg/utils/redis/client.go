@@ -271,26 +271,35 @@ func (c *Client) InfoFull() (map[string]string, error) {
 	}
 }
 
-func (c *Client) SetMaster(master string) error {
-	host, port, err := net.SplitHostPort(master)
+func (c *Client) SetMaster(master string, force bool) error {
+	slotsInfo, err := c.PkSlotsInfo()
 	if err != nil {
 		return errors.Trace(err)
 	}
-	c.Send("MULTI")
-	c.Send("CONFIG", "SET", "masterauth", c.Auth)
-	c.Send("SLAVEOF", host, port)
-	c.Send("CONFIG", "REWRITE")
-	c.Send("CLIENT", "KILL", "TYPE", "normal")
-	values, err := redigo.Values(c.Do("EXEC"))
-	if err != nil {
+	_ = c.ReconnectIfNeeded()
+	if err := c.SlaveOfAllSlots(master, slotsInfo.Slots(), force); err != nil {
 		return errors.Trace(err)
-	}
-	for _, r := range values {
-		if err, ok := r.(redigo.Error); ok {
-			return errors.Trace(err)
-		}
 	}
 	return nil
+	//host, port, err := net.SplitHostPort(master)
+	//if err != nil {
+	//	return errors.Trace(err)
+	//}
+	//c.Send("MULTI")
+	//c.Send("CONFIG", "SET", "masterauth", c.Auth)
+	//c.Send("SLAVEOF", host, port)
+	//c.Send("CONFIG", "REWRITE")
+	//c.Send("CLIENT", "KILL", "TYPE", "normal")
+	//values, err := redigo.Values(c.Do("EXEC"))
+	//if err != nil {
+	//	return errors.Trace(err)
+	//}
+	//for _, r := range values {
+	//	if err, ok := r.(redigo.Error); ok {
+	//		return errors.Trace(err)
+	//	}
+	//}
+	//return nil
 }
 
 func (c *Client) MigrateSlot(slot int, target string) (int, error) {
@@ -385,7 +394,7 @@ func (c *Client) SlotInfo(slot int) (pika.SlotInfo, error) {
 	return pika.ParseSlotInfo(infoReplyStr)
 }
 
-func (c *Client) PkSlotsInfo() (map[int]pika.SlotInfo, error) {
+func (c *Client) PkSlotsInfo() (pika.SlotsInfo, error) {
 	infoReply, err := c.Do("pkcluster", "info", "slot")
 	if err != nil {
 		return nil, err

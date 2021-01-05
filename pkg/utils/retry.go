@@ -24,9 +24,6 @@ func WithRetryEx(interval, timeout time.Duration, f func() error, isRetryableErr
 	for {
 		err := f()
 		if err == nil || !isRetryableErr(err) {
-			if err != nil {
-				log.Errorf("[WithRetryEx] returned non-retryable error: '%v'", errors.Trace(err))
-			}
 			return err
 		}
 		select {

@@ -36,7 +36,7 @@ var (
 )
 
 // ParseSlotsInfo parse slots info string
-func ParseSlotsInfo(slotsInfoString string) (slotInfos map[int]SlotInfo, err error) {
+func ParseSlotsInfo(slotsInfoString string) (slotInfos SlotsInfo, err error) {
 	slotInfos = make(map[int]SlotInfo)
 
 	slotInfoStrings := trimmedSplit(slotsInfoString, "\r\n\r\n")
