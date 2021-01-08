@@ -145,21 +145,20 @@ func (c *Client) Delete(path string) error {
 }
 
 func (c *Client) Rmdir(dir string) error {
-	return c.delete(dir, "rmdir")
+	return c.delete(dir, "rmdir", clientv3.WithPrefix())
 }
 
-func (c *Client) delete(path string, desc string) error {
+func (c *Client) delete(path string, desc string, opts ...clientv3.OpOption) error {
 	c.Lock()
 	defer c.Unlock()
 	if c.closed {
 		return errors.Trace(ErrClosedClient)
 	}
+	log.Debugf("etcd %s %s", desc, path)
 	cntx, cancel := c.newContext()
 	defer cancel()
-	log.Debugf("etcd %s %s", desc, path)
-	_, err := c.kapi.Delete(cntx, path, clientv3.WithPrefix())
-	if err != nil {
-		log.Debugf("etcd %s %s failed: %s", desc, path, err)
+	if _, err := c.kapi.Delete(cntx, path, opts...); err != nil {
+		log.Errorf("etcd %s %s failed: %s", desc, path, err)
 		return errors.Trace(err)
 	}
 	log.Debugf("etcd %s %s OK", desc, path)
