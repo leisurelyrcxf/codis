@@ -621,7 +621,7 @@ func (s *Topom) SlaveOfMaster(addr string, slots []int, slaveOfForceOpt pika.Sla
 
 	slaveSlots := pika.SlotsInfo(slaveSlotsInfo).Slots()
 	groupedJobs := pika.SlaveOfMasterJobs(okJobs).GroupJobs()
-	return s.action.redisp.WithRedisClient(addr, func(client *redis.Client) (err error) {
+	return errors.Wrap(err, s.action.redisp.WithRedisClient(addr, func(client *redis.Client) (err error) {
 		for k, g := range groupedJobs {
 			err = errors.Wrap(err, func(k pika.SlaveOfMasterJobKey, g pika.SlaveOfMasterJobs) error {
 				jbgSlots := g.Slots()
@@ -639,7 +639,7 @@ func (s *Topom) SlaveOfMaster(addr string, slots []int, slaveOfForceOpt pika.Sla
 			}(k, g))
 		}
 		return err
-	})
+	}))
 }
 
 func (s *Topom) Reload() error {
