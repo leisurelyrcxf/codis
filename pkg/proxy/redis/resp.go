@@ -59,6 +59,13 @@ func (r *Resp) IsArray() bool {
 	return r.Type == TypeArray
 }
 
+func (r *Resp) ErrMsg() string {
+	if len(r.Value) == 0 {
+		return "<nil>"
+	}
+	return string(r.Value)
+}
+
 func NewString(value []byte) *Resp {
 	r := &Resp{}
 	r.Type = TypeString
