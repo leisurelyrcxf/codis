@@ -318,6 +318,8 @@ func (bc *BackendConn) loopReader(tasks <-chan *Request, c *redis.Conn, round in
 			return bc.handleRequestError(r, genBackendFailureError(err))
 		}
 		if resp != nil && resp.IsError() {
+			resp.AddAdditionalInfo("pika_addr", bc.Addr())
+
 			switch {
 			case bytes.HasPrefix(resp.Value, errRespMasterDown):
 				if bc.state.CompareAndSwap(stateConnected, stateDataStale) {
