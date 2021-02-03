@@ -128,3 +128,21 @@ func replaceUnspecifiedIP(network string, address string, replace bool) (string,
 		return "", errors.Errorf("resolve address '%s' to '%s'", address, tcpAddr.String())
 	}
 }
+
+func ValidateAddr(addr string, desc string) error {
+	hostStr, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	if hostStr == "" {
+		return errors.Errorf("invalid %s addr %s", desc, addr)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return errors.Errorf("invalid %s addr %s", desc, addr)
+	}
+	if port <= 0 || port >= 65535 {
+		return errors.Errorf("invalid %s addr %s", desc, addr)
+	}
+	return nil
+}

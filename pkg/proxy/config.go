@@ -6,6 +6,8 @@ package proxy
 import (
 	"bytes"
 
+	"github.com/CodisLabs/codis/pkg/utils"
+
 	"github.com/BurntSushi/toml"
 
 	"github.com/CodisLabs/codis/pkg/utils/bytesize"
@@ -137,10 +139,6 @@ metrics_report_influxdb_database = ""
 metrics_report_statsd_server = ""
 metrics_report_statsd_period = "1s"
 metrics_report_statsd_prefix = ""
-
-# Set prometheus server, proxy will be scrape by prometheus.
-metrics_report_prometheus_server = false
-metrics_report_prometheus_period = "1s"
 `
 
 type Config struct {
@@ -204,8 +202,6 @@ type Config struct {
 	MetricsReportStatsdServer     string            `toml:"metrics_report_statsd_server" json:"metrics_report_statsd_server"`
 	MetricsReportStatsdPeriod     timesize.Duration `toml:"metrics_report_statsd_period" json:"metrics_report_statsd_period"`
 	MetricsReportStatsdPrefix     string            `toml:"metrics_report_statsd_prefix" json:"metrics_report_statsd_prefix"`
-	MetricsReportPrometheusServer bool              `toml:"metrics_report_prometheus_server" json:"metrics_report_prometheus_server"`
-	MetricsReportPrometheusPeriod timesize.Duration `toml:"metrics_report_prometheus_period" json:"metrics_report_prometheus_period"`
 }
 
 func NewDefaultConfig() *Config {
@@ -242,21 +238,27 @@ func (c *Config) Validate() error {
 	if c.ProxyAddr == "" {
 		return errors.New("invalid proxy_addr")
 	}
+	if err := utils.ValidateAddr(c.ProxyAddr, "proxy_addr"); err != nil {
+		return err
+	}
 	if c.AdminAddr == "" {
 		return errors.New("invalid admin_addr")
+	}
+	if err := utils.ValidateAddr(c.AdminAddr, "proxy_admin_adr"); err != nil {
+		return err
 	}
 	if c.JodisName != "" {
 		if c.JodisAddr == "" {
 			return errors.New("invalid jodis_addr")
 		}
-		if c.JodisTimeout < 0 {
+		if c.JodisTimeout <= 0 {
 			return errors.New("invalid jodis_timeout")
 		}
 	}
 	if c.ProductName == "" {
 		return errors.New("invalid product_name")
 	}
-	if c.ProxyMaxClients < 0 {
+	if c.ProxyMaxClients <= 0 {
 		return errors.New("invalid proxy_max_clients")
 	}
 
@@ -268,54 +270,54 @@ func (c *Config) Validate() error {
 	if d := c.ProxyHeapPlaceholder; d < 0 || d > MaxInt {
 		return errors.New("invalid proxy_heap_placeholder")
 	}
-	if c.BackendPingPeriod < 0 {
+	if c.BackendPingPeriod <= 0 {
 		return errors.New("invalid backend_ping_period")
 	}
 
-	if d := c.BackendRecvBufsize; d < 0 || d > MaxInt {
+	if d := c.BackendRecvBufsize; d <= 0 || d > MaxInt {
 		return errors.New("invalid backend_recv_bufsize")
 	}
-	if c.BackendRecvTimeout < 0 {
+	if c.BackendRecvTimeout <= 0 {
 		return errors.New("invalid backend_recv_timeout")
 	}
-	if d := c.BackendSendBufsize; d < 0 || d > MaxInt {
+	if d := c.BackendSendBufsize; d <= 0 || d > MaxInt {
 		return errors.New("invalid backend_send_bufsize")
 	}
-	if c.BackendSendTimeout < 0 {
+	if c.BackendSendTimeout <= 0 {
 		return errors.New("invalid backend_send_timeout")
 	}
-	if c.BackendMaxPipeline < 0 {
+	if c.BackendMaxPipeline <= 0 {
 		return errors.New("invalid backend_max_pipeline")
 	}
-	if c.BackendPrimaryParallel < 0 {
+	if c.BackendPrimaryParallel <= 0 {
 		return errors.New("invalid backend_primary_parallel")
 	}
-	if c.BackendReplicaParallel < 0 {
+	if c.BackendReplicaParallel <= 0 {
 		return errors.New("invalid backend_replica_parallel")
 	}
-	if c.BackendKeepAlivePeriod < 0 {
+	if c.BackendKeepAlivePeriod <= 0 {
 		return errors.New("invalid backend_keepalive_period")
 	}
 	if c.BackendNumberDatabases < 1 {
 		return errors.New("invalid backend_number_databases")
 	}
 
-	if d := c.SessionRecvBufsize; d < 0 || d > MaxInt {
+	if d := c.SessionRecvBufsize; d <= 0 || d > MaxInt {
 		return errors.New("invalid session_recv_bufsize")
 	}
-	if c.SessionRecvTimeout < 0 {
+	if c.SessionRecvTimeout <= 0 {
 		return errors.New("invalid session_recv_timeout")
 	}
-	if d := c.SessionSendBufsize; d < 0 || d > MaxInt {
+	if d := c.SessionSendBufsize; d <= 0 || d > MaxInt {
 		return errors.New("invalid session_send_bufsize")
 	}
-	if c.SessionSendTimeout < 0 {
+	if c.SessionSendTimeout <= 0 {
 		return errors.New("invalid session_send_timeout")
 	}
-	if c.SessionMaxPipeline < 0 {
+	if c.SessionMaxPipeline <= 0 {
 		return errors.New("invalid session_max_pipeline")
 	}
-	if c.SessionKeepAlivePeriod < 0 {
+	if c.SessionKeepAlivePeriod <= 0 {
 		return errors.New("invalid session_keepalive_period")
 	}
 
@@ -328,5 +330,19 @@ func (c *Config) Validate() error {
 	if c.MetricsReportStatsdPeriod < 0 {
 		return errors.New("invalid metrics_report_statsd_period")
 	}
+	if c.MaxSlotNum <= 0 {
+		return errors.New("invalid max_slot_number")
+	}
 	return nil
+}
+
+func ValidateConfig(cfgBytes []byte) (*Config, error) {
+	cfg := &Config{}
+	if _, err := toml.Decode(string(cfgBytes), cfg); err != nil {
+		return nil, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }

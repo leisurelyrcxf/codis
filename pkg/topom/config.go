@@ -6,6 +6,8 @@ package topom
 import (
 	"bytes"
 
+	"github.com/CodisLabs/codis/pkg/utils"
+
 	"github.com/BurntSushi/toml"
 
 	"github.com/CodisLabs/codis/pkg/models"
@@ -57,6 +59,7 @@ sentinel_notification_script = ""
 sentinel_client_reconfig_script = ""
 
 mode = "pika"
+prometheus_report_period = "1s"
 `
 
 type Config struct {
@@ -138,6 +141,9 @@ func (c *Config) Validate() error {
 	if c.AdminAddr == "" {
 		return errors.New("invalid admin_addr")
 	}
+	if err := utils.ValidateAddr(c.AdminAddr, "dashboard_addr"); err != nil {
+		return err
+	}
 	if c.ProductName == "" {
 		return errors.New("invalid product_name")
 	}
@@ -174,5 +180,22 @@ func (c *Config) Validate() error {
 	if c.SentinelFailoverTimeout <= 0 {
 		return errors.New("invalid sentinel_failover_timeout")
 	}
+	if c.MaxSlotNum <= 0 {
+		return errors.New("invalid max_slot_number")
+	}
+	if c.PrometheusReportPeriod <= 0 {
+		return errors.New("invalid prometheus_report_period")
+	}
 	return nil
+}
+
+func ValidateConfig(cfgBytes []byte) (*Config, error) {
+	cfg := &Config{}
+	if _, err := toml.Decode(string(cfgBytes), cfg); err != nil {
+		return nil, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
