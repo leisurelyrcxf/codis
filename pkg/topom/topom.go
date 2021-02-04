@@ -734,7 +734,7 @@ func (p *Topom) collectPrometheusMetrics() {
 	const (
 		LabelProductName = "product_name"
 		LabelAddr        = "addr"
-		LabelGroup       = "group"
+		LabelGid         = "gid"
 		LabelPid         = "pid"
 		NanValue         = -1.0
 		LabelCmdName     = "cmd_name"
@@ -866,11 +866,13 @@ func (p *Topom) collectPrometheusMetrics() {
 		pikaLabels = []string{
 			LabelProductName,
 			LabelAddr,
+			LabelGid,
 		}
-		newPikaLabels = func(productName string, pikaAddr string) prometheus.Labels {
+		newPikaLabels = func(productName string, pikaAddr string, gid int) prometheus.Labels {
 			return prometheus.Labels{
 				LabelProductName: productName,
 				LabelAddr:        pikaAddr,
+				LabelGid:         fmt.Sprintf("%03d", gid),
 			}
 		}
 		pikaMetrics = map[string]string{
@@ -953,13 +955,13 @@ func (p *Topom) collectPrometheusMetrics() {
 	var (
 		groupLabels = []string{
 			LabelProductName,
-			LabelGroup,
+			LabelGid,
 			LabelPid,
 		}
 		newGroupLabels = func(productName string, gid int, pid int) prometheus.Labels {
 			return prometheus.Labels{
 				LabelProductName: productName,
-				LabelGroup:       strconv.Itoa(gid),
+				LabelGid:         fmt.Sprintf("%03d", gid),
 				LabelPid:         strconv.Itoa(pid),
 			}
 		}
@@ -1043,11 +1045,11 @@ func (p *Topom) collectPrometheusMetrics() {
 
 					rs := stats.Group.Stats[addr]
 					gaugesUp := newGauges(
-						pikaGauges["up"].With(newPikaLabels(productName, addr)),
+						pikaGauges["up"].With(newPikaLabels(productName, addr, gid)),
 						groupGauges["up"].With(newGroupLabels(productName, gid, pid)),
 					)
 					gaugesOK := newGauges(
-						pikaGauges["ok"].With(newPikaLabels(productName, addr)),
+						pikaGauges["ok"].With(newPikaLabels(productName, addr, gid)),
 						groupGauges["ok"].With(newGroupLabels(productName, gid, pid)),
 					)
 
@@ -1105,7 +1107,7 @@ func (p *Topom) collectPrometheusMetrics() {
 							}
 						}
 
-						pikaGauges[metric].With(newPikaLabels(productName, addr)).Set(val)
+						pikaGauges[metric].With(newPikaLabels(productName, addr, gid)).Set(val)
 						groupGauges[metric].With(newGroupLabels(productName, gid, pid)).Set(val)
 					}
 				}
