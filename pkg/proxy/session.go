@@ -267,7 +267,7 @@ func (s *Session) loopWriter(tasks *RequestChan) (err error) {
 			return s.incrOpFails(r, err)
 		} else {
 			if resp.Type == redis.TypeError {
-				log.Debugf("[Session][loopWriter] ERR response type is redis.TypeError: %s", resp.ErrMsg())
+				log.Debugf("[Session][loopWriter] pika_error: %s", resp.ErrMsg())
 			}
 			s.incrOpStats(r, resp.Type)
 		}

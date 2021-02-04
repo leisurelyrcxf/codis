@@ -37,6 +37,15 @@ type Resp struct {
 
 	Value []byte
 	Array []*Resp
+
+	AdditionalInfo map[string]string
+}
+
+func (r *Resp) AddAdditionalInfo(key, val string) {
+	if r.AdditionalInfo == nil {
+		r.AdditionalInfo = map[string]string{}
+	}
+	r.AdditionalInfo[key] = val
 }
 
 func (r *Resp) IsString() bool {
@@ -63,7 +72,10 @@ func (r *Resp) ErrMsg() string {
 	if len(r.Value) == 0 {
 		return "<nil>"
 	}
-	return string(r.Value)
+	if len(r.AdditionalInfo) == 0 {
+		return string(r.Value)
+	}
+	return fmt.Sprintf("%s, additional info: %v", string(r.Value), r.AdditionalInfo)
 }
 
 func NewString(value []byte) *Resp {
