@@ -60,6 +60,8 @@ sentinel_client_reconfig_script = ""
 
 mode = "pika"
 prometheus_report_period = "1s"
+
+max_slot_num = 1024
 `
 
 type Config struct {
