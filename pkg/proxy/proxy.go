@@ -56,12 +56,12 @@ type Proxy struct {
 	}
 	jodis *Jodis
 
-	ps ProxySessions
+	ps SessionStore
 }
 
-type ProxySessions struct {
-	sessionMap map[*Session]struct{}
-	smm        sync.RWMutex
+type SessionStore struct {
+	sessions map[*Session]struct{}
+	smm      sync.RWMutex
 }
 
 var ErrClosedProxy = errors.New("use of closed proxy")
@@ -93,7 +93,7 @@ func newProxy(config *Config, test bool) (*Proxy, error) {
 	s.model.Pwd, _ = os.Getwd()
 
 	enableReadHA.Set(s.config.EnableReadHA)
-	s.ps.sessionMap = make(map[*Session]struct{})
+	s.ps.sessions = make(map[*Session]struct{})
 	if b, err := exec.Command("uname", "-a").Output(); err != nil {
 		log.WarnErrorf(err, "run command uname failed")
 	} else {

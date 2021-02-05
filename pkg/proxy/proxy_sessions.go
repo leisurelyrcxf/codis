@@ -2,33 +2,33 @@ package proxy
 
 import "github.com/CodisLabs/codis/pkg/utils/log"
 
-func (ps *ProxySessions) addSession(s *Session) bool {
+func (ps *SessionStore) addSession(s *Session) bool {
 	ps.smm.Lock()
 	defer ps.smm.Unlock()
-	if ps.sessionMap != nil {
-		ps.sessionMap[s] = struct{}{}
+	if ps.sessions != nil {
+		ps.sessions[s] = struct{}{}
 		return true
 	}
 	return false
 }
 
-func (ps *ProxySessions) removeSession(s *Session) bool {
+func (ps *SessionStore) removeSession(s *Session) bool {
 	ps.smm.Lock()
 	defer ps.smm.Unlock()
-	if ps.sessionMap != nil {
-		delete(ps.sessionMap, s)
+	if ps.sessions != nil {
+		delete(ps.sessions, s)
 		return true
 	}
 	return false
 }
 
-func (ps *ProxySessions) closeAllSessionReader() {
+func (ps *SessionStore) closeAllSessionReader() {
 	ps.smm.Lock()
 	defer ps.smm.Unlock()
-	for k := range ps.sessionMap {
-		if err := k.CloseReaderWithError(ErrClosedProxy); err != nil {
-			log.Errorf("[%p] session reader close on error", k)
+	for session := range ps.sessions {
+		if err := session.CloseReaderWithError(ErrClosedProxy); err != nil {
+			log.Errorf("[%p] close session reader failed: %v", session, err)
 		}
 	}
-	ps.sessionMap = nil
+	ps.sessions = nil
 }
