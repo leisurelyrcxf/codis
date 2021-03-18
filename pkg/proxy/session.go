@@ -72,27 +72,21 @@ func NewSession(sock net.Conn, config *Config) *Session {
 	)
 	c.ReaderTimeout = config.SessionRecvTimeout.Duration()
 	c.WriterTimeout = config.SessionSendTimeout.Duration()
-	c.SetKeepAlivePeriod(config.SessionKeepAlivePeriod.Duration())
+	_ = c.SetKeepAlivePeriod(config.SessionKeepAlivePeriod.Duration())
 
 	s := &Session{
 		Conn: c, config: config,
 		CreateUnix: time.Now().Unix(),
 	}
 	s.stats.opmap = make(map[string]*opStats, 16)
-	log.Infof("session [%p] create: %s", s, s)
+	log.Debugf("session [%p] create: %s", s, s)
 	return s
 }
 
 func (s *Session) CloseReaderWithError(err error) error {
 	s.exit.Do(func() {
-		if err != nil {
-			if isEOF(err) {
-				log.Infof("session [%p] reader closed: %s, error: %s", s, s, err)
-			} else {
-				log.Warnf("session [%p] reader closed: %s, error: %s", s, s, err)
-			}
-		} else {
-			log.Infof("session [%p] reader closed: %s, quit", s, s)
+		if err == nil {
+			log.Debugf("session [%p] reader closed: %s, quit", s, s)
 		}
 	})
 	return s.Conn.CloseReader()
@@ -100,29 +94,22 @@ func (s *Session) CloseReaderWithError(err error) error {
 
 func (s *Session) CloseWithError(err error) error {
 	s.exit.Do(func() {
-		if err != nil {
-			if isEOF(err) {
-				log.Infof("session [%p] closed: %s, error: %s", s, s, err)
-			} else {
-				log.Warnf("session [%p] closed: %s, error: %s", s, s, err)
-			}
-		} else {
-			log.Infof("session [%p] closed: %s, quit", s, s)
+		if err == nil {
+			log.Debugf("session [%p] closed: %s, quit", s, s)
 		}
 	})
 	s.broken.Set(true)
 	return s.Conn.Close()
 }
 
-func isEOF(err error) bool {
+func errorf(err error) func(string, ...interface{}) {
 	if err == io.EOF {
-		return true
+		return log.Infof
 	}
-	tracedError, ok := err.(*errors.TracedError)
-	if !ok {
-		return false
+	if tracedError, ok := err.(*errors.TracedError); ok && tracedError.Cause == io.EOF {
+		return log.Infof
 	}
-	return tracedError.Cause == io.EOF
+	return log.Warnf
 }
 
 var (
@@ -196,6 +183,7 @@ func (s *Session) loopReader(tasks *RequestChan, d *Router) (err error) {
 	for !s.quit {
 		multi, err := s.Conn.DecodeMultiBulk()
 		if err != nil {
+			errorf(err)("[Session][loopReader] s.Conn.DecodeMultiBulk failed: %v", err)
 			return err
 		}
 		if len(multi) == 0 {
@@ -204,6 +192,7 @@ func (s *Session) loopReader(tasks *RequestChan, d *Router) (err error) {
 		s.incrOpTotal()
 
 		if tasks.Buffered() > maxPipelineLen {
+			errorf(ErrTooManyPipelinedRequests)("[Session][loopReader] handle request failed: %v", ErrTooManyPipelinedRequests)
 			return s.incrOpFails(nil, ErrTooManyPipelinedRequests)
 		}
 
@@ -221,6 +210,7 @@ func (s *Session) loopReader(tasks *RequestChan, d *Router) (err error) {
 			r.Resp = redis.NewErrorf("ERR handle request, %s", err)
 			tasks.PushBack(r)
 			if breakOnFailure {
+				errorf(err)("[Session][loopReader] handle request failed: %v", err)
 				return err
 			}
 		} else {
@@ -253,18 +243,18 @@ func (s *Session) loopWriter(tasks *RequestChan) (err error) {
 		if err != nil {
 			resp = redis.NewErrorf("ERR handle response, %s", err)
 			if breakOnFailure {
-				log.Warnf("[Session][loopWriter] handle response failed: %v", err)
+				errorf(err)("[Session][loopWriter] handle response failed: %v", err)
 				_ = s.Conn.Encode(resp, true)
 				return s.incrOpFails(r, err)
 			}
 		}
 		if err := p.Encode(resp); err != nil {
-			log.Warnf("[Session][loopWriter] Encode response failed: %v", err)
+			errorf(err)("[Session][loopWriter] Encode response failed: %v", err)
 			return s.incrOpFails(r, err)
 		}
 		fflush := tasks.IsEmpty()
 		if err := p.Flush(fflush); err != nil {
-			log.Warnf("[Session][loopWriter] Flush response failed: %v", err)
+			errorf(err)("[Session][loopWriter] Flush response failed: %v", err)
 			return s.incrOpFails(r, err)
 		} else {
 			if resp.Type == redis.TypeError {
