@@ -253,21 +253,22 @@ func (s *Session) loopWriter(tasks *RequestChan) (err error) {
 		if err != nil {
 			resp = redis.NewErrorf("ERR handle response, %s", err)
 			if breakOnFailure {
-				s.Conn.Encode(resp, true)
+				log.Warnf("[Session][loopWriter] handle response failed: %v", err)
+				_ = s.Conn.Encode(resp, true)
 				return s.incrOpFails(r, err)
 			}
 		}
 		if err := p.Encode(resp); err != nil {
-			log.Debugf("[Session][loopWriter] Encode response failed: %v", err)
+			log.Warnf("[Session][loopWriter] Encode response failed: %v", err)
 			return s.incrOpFails(r, err)
 		}
 		fflush := tasks.IsEmpty()
 		if err := p.Flush(fflush); err != nil {
-			log.Debugf("[Session][loopWriter] Flush response failed: %v", err)
+			log.Warnf("[Session][loopWriter] Flush response failed: %v", err)
 			return s.incrOpFails(r, err)
 		} else {
 			if resp.Type == redis.TypeError {
-				log.Debugf("[Session][loopWriter] pika_error: %s", resp.ErrMsg())
+				log.Infof("[Session][loopWriter] pika_error: %s", resp.ErrMsg())
 			}
 			s.incrOpStats(r, resp.Type)
 		}
