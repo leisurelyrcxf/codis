@@ -5,9 +5,13 @@ package topom
 
 import (
 	"fmt"
+	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/CodisLabs/codis/pkg/utils/pika"
@@ -29,11 +33,40 @@ import (
 	"github.com/CodisLabs/codis/pkg/utils/rpc"
 )
 
+var ErrNoMaster = errors.New("no master")
+
 type apiServer struct {
 	topom *Topom
 }
 
+func isPromReq(req *http.Request) bool {
+	return req.Method == "GET" && req.URL.Path == "/metrics"
+}
+
 func newApiServer(t *Topom) http.Handler {
+	var (
+		reverseProxies = make(map[string]*httputil.ReverseProxy)
+		proxyRW        sync.RWMutex
+
+		getReverseProxy = func(host string) *httputil.ReverseProxy {
+			if proxy := func() *httputil.ReverseProxy {
+				proxyRW.RLock()
+				defer proxyRW.RUnlock()
+
+				return reverseProxies[host]
+			}(); proxy != nil {
+				return proxy
+			}
+
+			proxyRW.Lock()
+			defer proxyRW.Unlock()
+
+			if proxy := reverseProxies[host]; proxy == nil {
+				reverseProxies[host] = httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: host})
+			}
+			return reverseProxies[host]
+		}
+	)
 	m := martini.New()
 	m.Use(martini.Recovery())
 	m.Use(render.Renderer())
@@ -52,12 +85,44 @@ func newApiServer(t *Topom) http.Handler {
 		}
 		c.Next()
 	})
+	m.Use(func(w http.ResponseWriter, req *http.Request, c martini.Context) {
+		if err := func() error {
+			if t.IsClosed() {
+				return ErrClosedTopom
+			}
+			if !t.IsOnline() {
+				return ErrNotOnline
+			}
+			var masterAddr string
+			if !t.IsSlave(&masterAddr) {
+				c.Next()
+				return nil
+			}
+			if masterAddr == "" {
+				return errors.Errorf("%v: admin_addr: %s", ErrNoMaster, t.model.GetAdminAddr())
+			}
+			if _, _, err := net.SplitHostPort(masterAddr); err != nil {
+				return errors.Errorf("invalid masterAddr: %s", masterAddr)
+			}
+			if masterAddr == t.model.GetAdminAddr() {
+				return errors.Errorf("status corrupted: masterAddr == t.model.GetAdminAddr()")
+			}
+			getReverseProxy(masterAddr).ServeHTTP(w, req)
+			return nil
+		}(); err != nil {
+			if !isPromReq(req) {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			}
+			code, msg := rpc.ApiResponseError(err)
+			w.WriteHeader(code)
+			_, _ = w.Write([]byte(msg))
+		}
+	})
 	// metrics endpoint should execute before gzip middleware.
 	m.Use(func(w http.ResponseWriter, req *http.Request) {
-		if req.Method != "GET" || req.URL.Path != "/metrics" {
-			return
+		if isPromReq(req) {
+			promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{}).ServeHTTP(w, req)
 		}
-		promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{}).ServeHTTP(w, req)
 	})
 	m.Use(gzip.All())
 	m.Use(func(c martini.Context, w http.ResponseWriter) {

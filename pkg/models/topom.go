@@ -15,6 +15,13 @@ type Topom struct {
 	Sys string `json:"sys"`
 }
 
+func (t *Topom) GetAdminAddr() string {
+	if t == nil {
+		return ""
+	}
+	return t.AdminAddr
+}
+
 func (t *Topom) Encode() []byte {
 	return jsonEncode(t)
 }

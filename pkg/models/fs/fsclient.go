@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/CodisLabs/codis/pkg/models/common"
+
 	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/log"
 )
@@ -21,6 +23,8 @@ import (
 var ErrClosedClient = errors.New("use of closed fs client")
 
 type Client struct {
+	common.DummyLockClient
+
 	sync.Mutex
 
 	RootDir  string
@@ -43,6 +47,13 @@ func New(dir string) (*Client, error) {
 		TempDir:  filepath.Join(fullpath, "temp"),
 		LockFile: filepath.Join(fullpath, "data.lck"),
 	}, nil
+}
+
+func (c *Client) IsClosed() bool {
+	c.Lock()
+	defer c.Unlock()
+
+	return c.closed
 }
 
 func (c *Client) realpath(path string) string {

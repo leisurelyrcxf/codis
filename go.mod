@@ -18,4 +18,5 @@ require (
 	github.com/samuel/go-zookeeper v0.0.0-20161028232340-1d7be4effb13
 	go.etcd.io/etcd/v3 v3.3.0-rc.0.0.20200707003333-58bb8ae09f8e
 	gopkg.in/alexcesaro/statsd.v2 v2.0.0
+    github.com/stretchr/testify v1.6.1
 )

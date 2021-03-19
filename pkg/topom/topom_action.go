@@ -20,7 +20,7 @@ import (
 )
 
 func (s *Topom) ProcessSlotAction() error {
-	for s.IsOnline() {
+	for s.IsOnline() && s.IsMaster() {
 		var (
 			marks = make(map[int]bool)
 			plans = make(map[int]bool)
@@ -126,7 +126,7 @@ func (s *Topom) ProcessSlotAction() error {
 // Deprecated: there is no state of ActionMigrating any more.
 func (s *Topom) processSlotAction(sid int) error {
 	var db int
-	for s.IsOnline() {
+	for s.IsOnline() && s.IsMaster() {
 		if exec, err := s.newSlotActionExecutor(sid); err != nil {
 			return err
 		} else if exec == nil {

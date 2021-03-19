@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/CodisLabs/codis/pkg/models/common"
+
 	"github.com/samuel/go-zookeeper/zk"
 
 	"github.com/CodisLabs/codis/pkg/utils/errors"
@@ -24,6 +26,8 @@ var DefaultLogfunc = func(format string, v ...interface{}) {
 }
 
 type Client struct {
+	common.DummyLockClient
+
 	sync.Mutex
 	conn *zk.Conn
 
@@ -71,6 +75,13 @@ func NewWithLogfunc(addrlist string, auth string, timeout time.Duration, logfunc
 		return nil, err
 	}
 	return c, nil
+}
+
+func (c *Client) IsClosed() bool {
+	c.Lock()
+	defer c.Unlock()
+
+	return c.closed
 }
 
 func (c *Client) reset() error {

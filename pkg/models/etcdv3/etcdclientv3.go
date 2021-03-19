@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/CodisLabs/codis/pkg/models/common"
 	"github.com/CodisLabs/codis/pkg/utils/assert"
 	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/log"
@@ -21,7 +22,6 @@ import (
 
 var ErrClosedClient = errors.New("use of closed etcd client")
 var ErrKeyNotExists = errors.New("key not exists")
-var ErrKeyAlreadyExists = errors.New("key already exists")
 
 type Client struct {
 	sync.Mutex
@@ -85,7 +85,7 @@ func (c *Client) Close() error {
 	return c.c.Close()
 }
 
-func (c *Client) isClosed() bool {
+func (c *Client) IsClosed() bool {
 	c.Lock()
 	defer c.Unlock()
 	return c.closed
@@ -114,7 +114,7 @@ func (c *Client) Create(path string, data []byte) error {
 		return errors.Trace(err)
 	}
 	if !resp.Succeeded {
-		err = ErrKeyAlreadyExists
+		err = common.ErrKeyAlreadyExists
 		log.Debugf("etcd create node %s failed: %s", path, err)
 		return err
 	}
@@ -288,7 +288,7 @@ func (c *Client) CreateEphemeralWithTimeout(path string, data []byte, timeout ti
 		return nil, errors.Trace(err)
 	}
 	if !resp.Succeeded {
-		err = ErrKeyAlreadyExists
+		err = common.ErrKeyAlreadyExists
 		log.Debugf("etcd create-ephemeral node %s failed: %s", path, err)
 		return nil, err
 	}
@@ -474,7 +474,7 @@ func (c *Client) ReadEphemeralInOrder(path string, must bool) ([]byte, error) {
 
 func (c *Client) WatchInOrder(path string) (<-chan struct{}, []string, error) {
 	err := c.MkDir(path)
-	if err != nil && err != ErrKeyAlreadyExists {
+	if err != nil && err != common.ErrKeyAlreadyExists {
 		return nil, nil, err
 	}
 
@@ -518,4 +518,122 @@ func (c *Client) WatchInOrder(path string) (<-chan struct{}, []string, error) {
 
 	log.Debugf("etcd watch-inorder OK")
 	return signal, paths, nil
+}
+
+func (c *Client) CAS(ctx, parent context.Context, path string, data []byte, ttl int64, deadlineLoopInterval time.Duration,
+	onError func(desc, reason error) bool, beforeKeepAliveOnceFunc common.BeforeKeepAliveOnceFunc) (
+	curData []byte, curRev int64, lease *common.Lease, err error) {
+	c.Lock()
+	defer c.Unlock()
+	if c.closed {
+		return nil, -1, nil, errors.Trace(ErrClosedClient)
+	}
+
+	log.Debugf("[CAS] cas node %s", path)
+	leaseGrantTime := time.Now()
+	leaseResp, err := c.c.Grant(ctx, ttl)
+	if err != nil {
+		log.Debugf("[CAS] etcd create-lease for node %s failed: %s", path, err)
+		return nil, -1, nil, errors.Trace(err)
+	}
+	if leaseResp.Error != "" {
+		log.Debugf("[CAS] etcd create-lease for node %s failed, leaseResp.Error: %s", path, leaseResp.Error)
+		return nil, -1, nil, errors.Trace(errors.New(leaseResp.Error))
+	}
+
+	lease = common.NewLease(
+		parent, c, leaseResp.ID, leaseResp.TTL,
+		deadlineLoopInterval, leaseGrantTime,
+		onError, beforeKeepAliveOnceFunc)
+	defer func() {
+		if err != nil {
+			lease.Close()
+			lease = nil
+		}
+	}()
+
+	put := clientv3.OpPut(path, string(data), clientv3.WithLease(leaseResp.ID))
+	get := clientv3.OpGet(path)
+	cond := clientv3.Compare(clientv3.Version(path), "=", 0)
+	txnResp, err := c.kapi.Txn(ctx).If(cond).Then(put).Else(get).Commit()
+	if err != nil {
+		log.Errorf("[CAS] etcd cas transaction for node %s failed: %s", path, err)
+		return nil, -1, lease, errors.Trace(err)
+	}
+	if !txnResp.Succeeded {
+		log.Infof("[CAS] etcd cas transaction node %s not succeed", path)
+		kv := txnResp.Responses[0].GetResponseRange().Kvs[0] // don't worry, etcd lib do like this too...
+		return kv.Value, kv.ModRevision, lease, common.ErrKeyAlreadyExists
+	}
+	return data, txnResp.Header.Revision, lease, nil
+}
+
+func (c *Client) KeepAliveOnce(ctx context.Context, lease *common.Lease, _ int64) (newTTL int64, kontinue bool, err error) {
+	if c.IsClosed() {
+		return 0, false, errors.Trace(ErrClosedClient)
+	}
+
+	resp, err := c.c.KeepAliveOnce(clientv3.WithRequireLeader(ctx), lease.ID.(clientv3.LeaseID))
+	if err != nil {
+		return -1, true, err
+	}
+	return resp.TTL, true, nil
+}
+
+func (c *Client) WatchOnce(ctx context.Context, path string, rev int64) error {
+	c.Lock()
+	if c.closed {
+		c.Unlock()
+		return errors.Trace(ErrClosedClient)
+	}
+
+	watchRev := rev + 1
+	log.Debugf("etcdv3 watchOnce on key %s @rev %d", path, watchRev)
+
+	cntx, cancel := context.WithCancel(clientv3.WithRequireLeader(ctx))
+	ch := c.c.Watch(cntx, path, clientv3.WithRev(watchRev))
+	c.Unlock()
+	defer cancel()
+
+	resp := <-ch
+	if err := resp.Err(); err != nil {
+		log.Warnf("etcdv3 watched key %s @rev %d failed: '%v'", path, watchRev, err)
+		return err
+	}
+
+	if len(resp.Events) == 0 {
+		log.Debugf("etcdv3 watched key %s @rev %d timeout ", path, watchRev)
+		return ctx.Err()
+	}
+	log.Debugf("etcdv3 watched key %s @rev %d received events: %v", path, watchRev, resp.Events)
+	return nil
+}
+
+func (c *Client) DeleteRevision(path string, rev int64) error {
+	c.Lock()
+	defer c.Unlock()
+	if c.closed {
+		return errors.Trace(ErrClosedClient)
+	}
+
+	log.Debugf("etcd delete %s @revision %d", path, rev)
+	cntx, cancel := c.newContext()
+	defer cancel()
+
+	del := clientv3.OpDelete(path)
+	cond := clientv3.Compare(clientv3.ModRevision(path), "=", rev)
+	if _, err := c.kapi.Txn(cntx).If(cond).Then(del).Commit(); err != nil {
+		log.Debugf("[CAS] etcd delete %s @revision %d failed: %v", path, rev, err)
+		return err
+	}
+	return nil
+}
+
+func (c *Client) Revoke(ctx context.Context, lease *common.Lease) error {
+	if c.IsClosed() {
+		return errors.Trace(ErrClosedClient)
+	}
+
+	_, err := c.c.Revoke(ctx, lease.ID.(clientv3.LeaseID))
+	return err
 }

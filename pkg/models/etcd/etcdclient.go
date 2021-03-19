@@ -5,10 +5,13 @@ package etcdclient
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/CodisLabs/codis/pkg/models/common"
 	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/log"
 	"go.etcd.io/etcd/v3/client"
@@ -80,6 +83,12 @@ func (c *Client) Close() error {
 	return nil
 }
 
+func (c *Client) IsClosed() bool {
+	c.Lock()
+	defer c.Unlock()
+	return c.closed
+}
+
 func (c *Client) newContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(c.context, c.timeout)
 }
@@ -97,6 +106,15 @@ func isErrNodeExists(err error) bool {
 	if err != nil {
 		if e, ok := err.(client.Error); ok {
 			return e.Code == client.ErrorCodeNodeExist
+		}
+	}
+	return false
+}
+
+func isErrRevisionNotFound(err error) bool {
+	if err != nil {
+		if e, ok := err.(client.Error); ok {
+			return e.Code == client.ErrorCodeTestFailed && e.Message == "Compare failed"
 		}
 	}
 	return false
@@ -157,24 +175,18 @@ func (c *Client) Update(path string, data []byte) error {
 }
 
 func (c *Client) Delete(path string) error {
-	c.Lock()
-	defer c.Unlock()
-	if c.closed {
-		return errors.Trace(ErrClosedClient)
-	}
-	cntx, cancel := c.newContext()
-	defer cancel()
-	log.Debugf("etcd delete node %s", path)
-	_, err := c.kapi.Delete(cntx, path, nil)
-	if err != nil && !isErrNoNode(err) {
-		log.Debugf("etcd delete node %s failed: %s", path, err)
-		return errors.Trace(err)
-	}
-	log.Debugf("etcd delete OK")
-	return nil
+	return c.delete(path, nil, "delete node")
+}
+
+func (c *Client) DeleteRevision(path string, rev int64) error {
+	return c.delete(path, &client.DeleteOptions{PrevIndex: uint64(rev)}, fmt.Sprintf("delete node of revision %d", rev))
 }
 
 func (c *Client) Rmdir(dir string) error {
+	return c.delete(dir, &client.DeleteOptions{Recursive: true, Dir: true}, "rmdir")
+}
+
+func (c *Client) delete(path string, opt *client.DeleteOptions, desc string) error {
 	c.Lock()
 	defer c.Unlock()
 	if c.closed {
@@ -182,13 +194,13 @@ func (c *Client) Rmdir(dir string) error {
 	}
 	cntx, cancel := c.newContext()
 	defer cancel()
-	log.Debugf("etcd rmdir %s", dir)
-	_, err := c.kapi.Delete(cntx, dir, &client.DeleteOptions{Recursive: true, Dir: true})
-	if err != nil && !isErrNoNode(err) {
-		log.Debugf("etcd rmdir %s failed: %s", dir, err)
+	log.Debugf("etcd %s %s", desc, path)
+	_, err := c.kapi.Delete(cntx, path, opt)
+	if err != nil && !isErrNoNode(err) && !isErrRevisionNotFound(err) {
+		log.Errorf("etcd %s %s failed: %s", desc, path, err)
 		return errors.Trace(err)
 	}
-	log.Debugf("etcd rmdir %s OK", dir)
+	log.Debugf("etcd %s %s OK", desc, path)
 	return nil
 }
 
@@ -386,4 +398,84 @@ func (c *Client) WatchInOrder(path string) (<-chan struct{}, []string, error) {
 	}()
 	log.Debugf("etcd watch-inorder OK")
 	return signal, paths, nil
+}
+
+func (c *Client) CAS(ctx, parent context.Context, path string, data []byte, ttl int64, deadlineLoopInterval time.Duration,
+	onError func(desc, reason error) bool, beforeKeepAliveOnceFunc common.BeforeKeepAliveOnceFunc) (
+	curData []byte, curRev int64, lease *common.Lease, err error) {
+	c.Lock()
+	defer c.Unlock()
+	if c.closed {
+		return nil, -1, nil, errors.Trace(ErrClosedClient)
+	}
+	grantTime := time.Now()
+	resp, err := c.kapi.Set(ctx, path, string(data), &client.SetOptions{
+		PrevExist: client.PrevNoExist,
+		TTL:       time.Duration(ttl) * time.Second,
+	})
+	if err != nil {
+		log.Debugf("[CAS] cas node %s failed: %s", path, err)
+		r, getErr := c.kapi.Get(ctx, path, &client.GetOptions{Quorum: true})
+		switch {
+		case getErr != nil:
+			log.Debugf("[CAS] etcd read node %s failed: %s", path, getErr)
+			return nil, -1, nil, errors.Trace(err)
+		case !r.Node.Dir:
+			return []byte(r.Node.Value), int64(r.Node.ModifiedIndex), nil, common.ErrKeyAlreadyExists
+		default:
+			log.Debugf("[CAS] etcd read node %s failed: not a file", path)
+			return nil, -1, nil, errors.Trace(err)
+		}
+	}
+	log.Debugf("etcd tryLock OK")
+	if resp.Node.ModifiedIndex > math.MaxInt64 {
+		return nil, -1, nil, errors.Errorf("int64 overflow")
+	}
+	return data, int64(resp.Node.ModifiedIndex), common.NewLease(
+		parent, c, path, ttl, deadlineLoopInterval, grantTime,
+		onError, beforeKeepAliveOnceFunc), nil
+}
+
+func (c *Client) WatchOnce(ctx context.Context, path string, rev int64) error {
+	c.Lock()
+	if c.closed {
+		c.Unlock()
+		return errors.Trace(ErrClosedClient)
+	}
+	log.Debugf("etcd watch-once node %s", path)
+
+	watcher := c.kapi.Watcher(path, &client.WatcherOptions{AfterIndex: uint64(rev)})
+	c.Unlock()
+
+	// TODO seems this rev cmp is not safe, need more tests.
+	for {
+		r, err := watcher.Next(ctx)
+		if err != nil {
+			log.Debugf("etch watch-once node %s failed: %s", path, err)
+			return err
+		}
+		if r.Action != "get" {
+			log.Debugf("etcd watch-once node %s recv events '%s'", path, r.Action)
+			return nil
+		}
+	}
+}
+
+func (c *Client) KeepAliveOnce(ctx context.Context, lease *common.Lease, ttl int64) (newTTL int64, kontinue bool, err error) {
+	if c.IsClosed() {
+		return 0, false, errors.Trace(ErrClosedClient)
+	}
+
+	if _, err := c.kapi.Set(ctx, lease.ID.(string), "", &client.SetOptions{
+		PrevExist: client.PrevExist,
+		Refresh:   true,
+		TTL:       time.Duration(ttl) * time.Second},
+	); err != nil {
+		return -1, true, err
+	}
+	return ttl, true, nil
+}
+
+func (c *Client) Revoke(context.Context, *common.Lease) error {
+	return nil
 }
