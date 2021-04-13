@@ -895,13 +895,7 @@ func (s *Topom) cleanupSlot(ctx *context, m *models.SlotMapping) error {
 	}
 
 	if m.Action.Resharding {
-		for _, am := range ctx.slots {
-			if am.Action.State != models.ActionNothing && am.Id != m.Id &&
-				am.GroupId == m.GroupId && am.GetSourceSlot() == m.GetSourceSlot() {
-				log.Infof("[cleanupSlot] skip cleanup slot %d, another slot %d exists for same source slot %d", m.Id, am.Id, m.GetSourceSlot())
-				return nil
-			}
-		}
+		return nil
 	}
 
 	sourceMaster, sourceSlaves := ctx.getGroupMaster(m.GroupId), ctx.getGroupSlaves(m.GroupId)
