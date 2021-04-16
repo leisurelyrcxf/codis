@@ -32,6 +32,10 @@ const (
 	PikaConcurrentSlotOpError = "Slot in syncing or a change operation is under way, retry later"
 )
 
+var (
+	ErrCommandNotSupported = fmt.Errorf("command not supported")
+)
+
 func IsRetryablePikaSlotError(err error) bool {
 	errMsg := err.Error()
 	return strings.Contains(errMsg, PikaRemoteNodeError) || strings.Contains(errMsg, PikaConcurrentSlotOpError)
@@ -545,6 +549,14 @@ func (c *Client) DeleteSlot(slot int) error {
 	return err
 }
 
+func (c *Client) CompactSlot(slot int) error {
+	_, err := c.Do("compact", "sync", strconv.Itoa(slot))
+	if err != nil && strings.Contains(err.Error(), "invalid Table for 'sync'") {
+		return ErrCommandNotSupported
+	}
+	return err
+}
+
 var ErrClosedPool = errors.New("use of closed redis pool")
 
 type Pool struct {
@@ -787,6 +799,38 @@ func (p *Pool) GetPikasSlotInfo(addrs []string) map[string]map[int]pika.SlotInfo
 	wg.Wait()
 
 	return m
+}
+
+func (p *Pool) CompactSlot(addrs []string, slot int) error {
+	if len(addrs) == 0 {
+		return nil
+	}
+
+	var (
+		wg   sync.WaitGroup
+		errs = make([]error, len(addrs))
+	)
+	for i, addr := range addrs {
+		wg.Add(1)
+
+		go func(i int, addr string) {
+			defer wg.Done()
+
+			if errs[i] = p.WithRedisClient(addr, func(client *Client) (err error) {
+				return client.CompactSlot(slot)
+			}); errs[i] != nil {
+				log.Warnf("[getPikasSlotInfo] can't get slots info for pika '%s', err: '%v'", addr, errs[i])
+			}
+		}(i, addr)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			return fmt.Errorf("compact slot of pika '%s' failed: '%v'", addrs[i], err)
+		}
+	}
+	return nil
 }
 
 func (p *Pool) AddSlotIfNotExists(addr string, slot int) error {

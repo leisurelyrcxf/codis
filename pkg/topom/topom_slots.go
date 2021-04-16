@@ -6,6 +6,7 @@ package topom
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -859,9 +860,18 @@ func (s *Topom) preparingSlot(ctx *context, m *models.SlotMapping) (err error) {
 
 func (s *Topom) watchSlot(ctx *context, m *models.SlotMapping) error {
 	gap := s.GetSlotActionGap()
-	return s.compareSlot(ctx, m, gap, func(string, string) error {
+	if err := s.compareSlot(ctx, m, gap, func(string, string) error {
 		return s.backedUpSlot(ctx, m, gap, false)
-	})
+	}); err != nil {
+		return err
+	}
+	if err := s.action.redisp.CompactSlot(ctx.getGroupMasterSlaves(m.Action.TargetId), m.Id); err != nil {
+		if !strings.Contains(err.Error(), redis.ErrCommandNotSupported.Error()) {
+			return err
+		}
+		log.Errorf("[watchSlot] compact slot not supported by pika")
+	}
+	return nil
 }
 
 func (s *Topom) preparedSlot(ctx *context, m *models.SlotMapping) error {
