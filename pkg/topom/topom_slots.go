@@ -865,6 +865,9 @@ func (s *Topom) watchSlot(ctx *context, m *models.SlotMapping) error {
 	}); err != nil {
 		return err
 	}
+	if m.GroupId == 0 || m.Action.TargetId == 0 {
+		return nil
+	}
 	if err := s.action.redisp.CompactSlot(ctx.getGroupMasterSlaves(m.Action.TargetId), m.Id); err != nil {
 		if !strings.Contains(err.Error(), redis.ErrCommandNotSupported.Error()) {
 			return err
