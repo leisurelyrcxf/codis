@@ -16,7 +16,6 @@ require (
 	github.com/oxtoacart/bpool v0.0.0-20150712133111-4e1c5567d7c2 // indirect
 	github.com/prometheus/client_golang v1.7.1
 	github.com/samuel/go-zookeeper v0.0.0-20161028232340-1d7be4effb13
-	github.com/ugorji/go v0.0.0-20170107133203-ded73eae5db7 // indirect
 	go.etcd.io/etcd/v3 v3.3.0-rc.0.0.20200707003333-58bb8ae09f8e
 	gopkg.in/alexcesaro/statsd.v2 v2.0.0
 )

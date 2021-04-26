@@ -93,7 +93,7 @@ func newApiServer(t *Topom) http.Handler {
 			r.Put("/create/:xauth/:addr", api.CreateProxy)
 			r.Put("/online/:xauth/:addr", api.OnlineProxy)
 			r.Put("/reinit/:xauth/:token", api.ReinitProxy)
-			r.Put("/remove/:xauth/:token/:force", api.RemoveProxy)
+			r.Put("/remove/:xauth/:token/:force/:metaonly", api.RemoveProxy)
 		})
 		r.Group("/group", func(r martini.Router) {
 			r.Put("/create/:xauth/:gid", api.CreateGroup)
@@ -311,7 +311,11 @@ func (s *apiServer) RemoveProxy(params martini.Params) (int, string) {
 	if err != nil {
 		return rpc.ApiResponseError(err)
 	}
-	if err := s.topom.RemoveProxy(token, force != 0); err != nil {
+	metaOnly, err := s.parseInteger(params, "metaonly")
+	if err != nil {
+		return rpc.ApiResponseError(err)
+	}
+	if err := s.topom.RemoveProxy(token, force != 0, metaOnly != 0); err != nil {
 		return rpc.ApiResponseError(err)
 	} else {
 		return rpc.ApiResponseJson("OK")
@@ -987,12 +991,15 @@ func (c *ApiClient) ReinitProxy(token string) error {
 	return rpc.ApiPutJson(url, nil, nil)
 }
 
-func (c *ApiClient) RemoveProxy(token string, force bool) error {
-	var value int
+func (c *ApiClient) RemoveProxy(token string, force, metaOnly bool) error {
+	var value, value2 int
 	if force {
 		value = 1
 	}
-	url := c.encodeURL("/api/topom/proxy/remove/%s/%s/%d", c.xauth, token, value)
+	if metaOnly {
+		value2 = 1
+	}
+	url := c.encodeURL("/api/topom/proxy/remove/%s/%s/%d/%d", c.xauth, token, value, value2)
 	return rpc.ApiPutJson(url, nil, nil)
 }
 

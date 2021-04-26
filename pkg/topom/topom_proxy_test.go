@@ -62,7 +62,7 @@ func TestRemoveProxy(x *testing.T) {
 	check([]string{})
 	assert.MustNoError(t.CreateProxy(p1.AdminAddr))
 	check([]string{p1.Token})
-	assert.MustNoError(t.RemoveProxy(p1.Token, false))
+	assert.MustNoError(t.RemoveProxy(p1.Token, false, false))
 	check([]string{})
 
 	p2, c2 := openProxy()
@@ -72,9 +72,9 @@ func TestRemoveProxy(x *testing.T) {
 	check([]string{p2.Token})
 
 	assert.MustNoError(c2.Shutdown())
-	assert.Must(t.RemoveProxy(p2.Token, false) != nil)
+	assert.Must(t.RemoveProxy(p2.Token, false, false) != nil)
 	check([]string{p2.Token})
 
-	assert.MustNoError(t.RemoveProxy(p2.Token, true))
+	assert.MustNoError(t.RemoveProxy(p2.Token, true, false))
 	check([]string{})
 }
