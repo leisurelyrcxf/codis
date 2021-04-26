@@ -75,7 +75,7 @@ func (s *Topom) OnlineProxy(addr string) error {
 	return s.reinitProxy(ctx, p, c)
 }
 
-func (s *Topom) RemoveProxy(token string, force bool) error {
+func (s *Topom) RemoveProxy(token string, force, metaOnly bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ctx, err := s.newContext()
@@ -87,14 +87,18 @@ func (s *Topom) RemoveProxy(token string, force bool) error {
 	if err != nil {
 		return err
 	}
-	c := s.newProxyClient(p)
 
-	if err := c.Shutdown(); err != nil {
-		log.WarnErrorf(err, "proxy-[%s] shutdown failed, force remove = %t", token, force)
-		if !force {
-			return errors.Errorf("proxy-[%s] shutdown failed", p.Token)
+	if !metaOnly {
+		c := s.newProxyClient(p)
+
+		if err := c.Shutdown(); err != nil {
+			log.WarnErrorf(err, "proxy-[%s] shutdown failed, force remove = %t", token, force)
+			if !force {
+				return errors.Errorf("proxy-[%s] shutdown failed", p.Token)
+			}
 		}
 	}
+
 	defer s.dirtyProxyCache(p.Token)
 
 	return s.storeRemoveProxy(p)

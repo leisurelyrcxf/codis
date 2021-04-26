@@ -251,7 +251,7 @@ func (hc *HealthyChecker) Maintains(client *topom.ApiClient, maxdown int, auth s
 		switch hc.pstatus[p.Token] {
 		case CodeError, CodeTimeout, CodeMissing:
 			log.Warnf("try to remove proxy-[%s]", p.AdminAddr)
-			if err := client.RemoveProxy(p.Token, true); err != nil {
+			if err := client.RemoveProxy(p.Token, true, false); err != nil {
 				log.ErrorErrorf(err, "call rpc remove-proxy to dashboard %s failed", p.AdminAddr)
 				return
 			}
