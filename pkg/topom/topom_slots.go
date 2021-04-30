@@ -6,9 +6,10 @@ package topom
 import (
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/CodisLabs/codis/pkg/utils/pika"
 
 	"github.com/CodisLabs/codis/pkg/models"
 	"github.com/CodisLabs/codis/pkg/utils/errors"
@@ -167,6 +168,7 @@ func (s *Topom) SlotCreateActionPlan(plan map[int]int) error {
 			if targetMaxSlotNum > srcMaxSlotNum {
 				m.Action.Resharding = true
 				m.Action.SourceMaxSlotNum = srcMaxSlotNum
+				m.Action.TargetMaxSlotNum = targetMaxSlotNum
 			}
 		}
 		if err := s.storeUpdateSlotMapping(m); err != nil {
@@ -865,15 +867,37 @@ func (s *Topom) watchSlot(ctx *context, m *models.SlotMapping) error {
 	}); err != nil {
 		return err
 	}
-	if m.GroupId == 0 || m.Action.TargetId == 0 {
+	if m.GroupId == 0 || m.Action.TargetId == 0 || !m.Action.Resharding {
 		return nil
 	}
-	if err := s.action.redisp.CompactSlot(ctx.getGroupMasterSlaves(m.Action.TargetId), m.Id); err != nil {
-		if !strings.Contains(err.Error(), redis.ErrCommandNotSupported.Error()) {
-			return err
-		}
-		log.Errorf("[watchSlot] compact slot not supported by pika")
+	targetPikaAddrs := ctx.getGroupMasterSlaves(m.Action.TargetId)
+	if m.Action.Info.LastCompact == nil || time.Since(*m.Action.Info.LastCompact) >= time.Minute {
+		_ = s.action.redisp.CompactSlot(targetPikaAddrs, m.Id)
+		m.UpdateLastCompact()
 	}
+
+	srcSlotSize, err := s.action.redisp.GetSlotDBSize(m.Action.Info.SourceMaster, m.GetSourceSlot())
+	if err != nil {
+		return err
+	}
+	expTargetSlotSize := srcSlotSize / int64(m.Action.TargetMaxSlotNum/m.Action.SourceMaxSlotNum)
+
+	targetPikasSlotSize, err := s.action.redisp.GetPikasSlotDBSize(targetPikaAddrs, m.Id)
+	if err != nil {
+		return err
+	}
+	var maxTargetPikaSize int64
+	for targetPikaIdx, targetPikaSlotSize := range targetPikasSlotSize {
+		if targetPikaSlotSize > int64(float64(expTargetSlotSize)*pika.MaxReshardingReplicationConflateCoef) {
+			return fmt.Errorf("db size not match for pika '%s', targetPikaSlotSize(%d) > expTargetSlotSize(%d) * MaxReshardingReplicationConflateCoef(%.2f))",
+				targetPikaAddrs[targetPikaIdx], targetPikaSlotSize, expTargetSlotSize, pika.MaxReshardingReplicationConflateCoef)
+		}
+		if targetPikaSlotSize > maxTargetPikaSize {
+			maxTargetPikaSize = targetPikaSlotSize
+		}
+	}
+	log.Infof("[watchSlot-[%d]] db size of all pikas %v of target group %d are lower than expected, maxTargetPikaSize(%d) <= expTargetSlotSize(%d)*pika.MaxReshardingReplicationConflateCoef(%.2f), safe to transition slot to next state",
+		m.Id, targetPikaAddrs, m.Action.TargetId, maxTargetPikaSize, expTargetSlotSize, pika.MaxReshardingReplicationConflateCoef)
 	return nil
 }
 

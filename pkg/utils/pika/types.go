@@ -104,6 +104,8 @@ type SlotInfo struct {
 
 	BinlogOffset
 
+	DBSize int64
+
 	Role Role
 
 	// If Role.IsSlave()

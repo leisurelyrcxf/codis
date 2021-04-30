@@ -189,7 +189,7 @@ LoopFor:
 
 func slaveOfDone(clientMaster, clientSlave *Client) bool {
 	_ = clientMaster.ReconnectIfNeeded()
-	masterSlotInfo, err := clientMaster.SlotInfo(1)
+	masterSlotInfo, err := clientMaster.SlotInfo(1, false)
 	if err != nil {
 		return false
 	}

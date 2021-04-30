@@ -386,8 +386,12 @@ func (c *Client) Role() (string, error) {
 	}
 }
 
-func (c *Client) SlotInfo(slot int) (pika.SlotInfo, error) {
-	infoReply, err := c.Do("pkcluster", "info", "slot", slot)
+func (c *Client) SlotInfo(slot int, full bool) (pika.SlotInfo, error) {
+	infoStr := "info"
+	if full {
+		infoStr = "infofull"
+	}
+	infoReply, err := c.Do("pkcluster", infoStr, "slot", slot)
 	if err != nil {
 		return pika.InvalidSlotInfo, err
 	}
@@ -395,7 +399,7 @@ func (c *Client) SlotInfo(slot int) (pika.SlotInfo, error) {
 	if err != nil {
 		return pika.InvalidSlotInfo, err
 	}
-	return pika.ParseSlotInfo(infoReplyStr)
+	return pika.ParseSlotInfoRaw(infoReplyStr, full)
 }
 
 func (c *Client) PkSlotsInfo() (pika.SlotsInfo, error) {
@@ -479,7 +483,7 @@ func (c *Client) slaveOfSlotsInternal(masterAddr string, slots []int, slotsDesc 
 			if connErr := c.ReconnectIfNeeded(); connErr != nil {
 				return errors.Wrap(err, connErr), []int{}
 			}
-			if slaveOfErr, _ := c.slaveOfSlotsInternal("no:one", sg.ToList(), sg.String(), false, false, true); slaveOfErr != nil {
+			if slaveOfErr, _ := c.slaveOfSlotsInternal("no:one", sg.ToList(), sg.String(), false, resharding, true); slaveOfErr != nil {
 				return slaveOfErr, []int{}
 			}
 		}
@@ -492,15 +496,12 @@ func (c *Client) slaveOfSlotsInternal(masterAddr string, slots []int, slotsDesc 
 	if pika.SlotGroups(newSlotGroups).SlotCount() >= len(slots) && len(nonConnectedSlots) == 0 {
 		return errors.Wrap(err, errors.Errorf("impossible: pika.SlotGroups(newSlotGroups).SlotCount() >= len(slots) && len(nonConnectedSlots) == 0, newSlotGroups: %v, slots: %v", newSlotGroups, pika.Slots(slots))), []int{}
 	}
-	if resharding && len(newSlotGroups) > 0 {
-		return errors.Wrap(err, errors.Errorf("impossible: resharding && len(newSlotGroups) > 0, newSlotGroups: %v", newSlotGroups)), []int{}
-	}
 	err, slavedOfSlots = nil, make([]int, 0, len(newSlotGroups))
 	for _, sg := range newSlotGroups {
 		if connErr := c.ReconnectIfNeeded(); connErr != nil {
 			return errors.Wrap(err, connErr), slavedOfSlots
 		}
-		slaveOfErr, partialSlavedOfSlots := c.slaveOfSlotsInternal(masterAddr, sg.ToList(), sg.String(), force, false, false)
+		slaveOfErr, partialSlavedOfSlots := c.slaveOfSlotsInternal(masterAddr, sg.ToList(), sg.String(), force, resharding, false)
 		err, slavedOfSlots = errors.Wrap(err, slaveOfErr), append(slavedOfSlots, partialSlavedOfSlots...)
 	}
 	return err, slavedOfSlots
@@ -549,9 +550,18 @@ func (c *Client) DeleteSlot(slot int) error {
 	return err
 }
 
+func (c *Client) GetSlotDBSize(slot int) (int64, error) {
+	slotInfo, err := c.SlotInfo(slot, true)
+	if err != nil {
+		return 0, err
+	}
+	return slotInfo.DBSize, nil
+}
+
 func (c *Client) CompactSlot(slot int) error {
-	_, err := c.Do("compact", "sync", strconv.Itoa(slot))
-	if err != nil && strings.Contains(err.Error(), "invalid Table for 'sync'") {
+	_, err := c.Do("pkcluster", "compactslot", strconv.Itoa(slot))
+	if err != nil && strings.Contains(err.Error(), "Err unknown or unsupported command") {
+		log.Errorf("%s, pika addr: %s", err.Error(), c.Addr)
 		return ErrCommandNotSupported
 	}
 	return err
@@ -740,7 +750,7 @@ func (p *Pool) WithRedisClient(addr string, do func(*Client) error) error {
 
 func (p *Pool) GetPikaSlotInfo(addr string, slot int) (slotInfo pika.SlotInfo, _ error) {
 	return slotInfo, p.WithRedisClient(addr, func(client *Client) (err error) {
-		slotInfo, err = client.SlotInfo(slot)
+		slotInfo, err = client.SlotInfo(slot, false)
 		return
 	})
 }
@@ -819,7 +829,7 @@ func (p *Pool) CompactSlot(addrs []string, slot int) error {
 			if errs[i] = p.WithRedisClient(addr, func(client *Client) (err error) {
 				return client.CompactSlot(slot)
 			}); errs[i] != nil {
-				log.Warnf("[getPikasSlotInfo] can't get slots info for pika '%s', err: '%v'", addr, errs[i])
+				log.Warnf("[CompactSlot] can't get slots info for pika '%s', err: '%v'", addr, errs[i])
 			}
 		}(i, addr)
 	}
@@ -831,6 +841,48 @@ func (p *Pool) CompactSlot(addrs []string, slot int) error {
 		}
 	}
 	return nil
+}
+
+func (p *Pool) GetSlotDBSize(addr string, slot int) (dbSize int64, _ error) {
+	return dbSize, p.WithRedisClient(addr, func(client *Client) (err error) {
+		dbSize, err = client.GetSlotDBSize(slot)
+		return err
+	})
+}
+
+func (p *Pool) GetPikasSlotDBSize(addrs []string, slot int) ([]int64, error) {
+	if len(addrs) == 0 {
+		return nil, nil
+	}
+
+	var (
+		wg      sync.WaitGroup
+		dbSizes = make([]int64, len(addrs))
+		errs    = make([]error, len(addrs))
+	)
+	for i, addr := range addrs {
+		wg.Add(1)
+
+		go func(i int, addr string) {
+			defer wg.Done()
+
+			var dbSize int64
+			if errs[i] = p.WithRedisClient(addr, func(client *Client) (err error) {
+				dbSize, err = client.GetSlotDBSize(slot)
+				return err
+			}); errs[i] == nil {
+				dbSizes[i] = dbSize
+			}
+		}(i, addr)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			return nil, fmt.Errorf("get slot db size of pika '%s' failed: '%v'", addrs[i], err)
+		}
+	}
+	return dbSizes, nil
 }
 
 func (p *Pool) AddSlotIfNotExists(addr string, slot int) error {
