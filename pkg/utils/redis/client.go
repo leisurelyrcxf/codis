@@ -275,13 +275,13 @@ func (c *Client) InfoFull() (map[string]string, error) {
 	}
 }
 
-func (c *Client) SetMaster(master string, force bool) error {
+func (c *Client) BecomeMasterAllSlots() error {
 	slotsInfo, err := c.PkSlotsInfo()
 	if err != nil {
 		return errors.Trace(err)
 	}
 	_ = c.ReconnectIfNeeded()
-	if err := c.SlaveOfAllSlots(master, slotsInfo.Slots(), force); err != nil {
+	if err := c.SlaveOfAllSlots("NO:ONE", slotsInfo.Slots(), false, false); err != nil {
 		return errors.Trace(err)
 	}
 	return nil
@@ -424,13 +424,13 @@ func (c *Client) SlaveOf(masterAddr string, slot int, force, resharding bool) er
 	return err
 }
 
-func (c *Client) SlaveOfSlots(masterAddr string, slots pika.SlotGroup, force bool) error {
-	err, _ := c.slaveOfSlotsInternal(masterAddr, slots.ToList(), slots.String(), force, false, true)
+func (c *Client) SlaveOfSlots(masterAddr string, slots pika.SlotGroup, force, resharding bool) error {
+	err, _ := c.slaveOfSlotsInternal(masterAddr, slots.ToList(), slots.String(), force, resharding, true)
 	return err
 }
 
-func (c *Client) SlaveOfAllSlots(masterAddr string, slaveSlots []int, force bool) error {
-	err, _ := c.slaveOfSlotsInternal(masterAddr, slaveSlots, "all", force, false, true)
+func (c *Client) SlaveOfAllSlots(masterAddr string, slaveSlots []int, force, resharding bool) error {
+	err, _ := c.slaveOfSlotsInternal(masterAddr, slaveSlots, "all", force, resharding, true)
 	return err
 }
 
@@ -803,6 +803,49 @@ func (p *Pool) GetPikasSlotInfo(addrs []string) map[string]map[int]pika.SlotInfo
 
 			mutex.Lock()
 			m[addr] = slotInfos
+			mutex.Unlock()
+		}(pikaAddr)
+	}
+	wg.Wait()
+
+	return m
+}
+
+func (p *Pool) GetMaxSlotNums(addrs []string) map[string]int {
+	var (
+		m     = make(map[string]int)
+		mutex sync.Mutex
+	)
+
+	if len(addrs) == 0 {
+		return m
+	}
+
+	var addrSet = make(map[string]struct{})
+	for _, addr := range addrs {
+		if addr != "" {
+			addrSet[addr] = struct{}{}
+		}
+	}
+
+	var wg sync.WaitGroup
+	for pikaAddr := range addrSet {
+		wg.Add(1)
+
+		go func(addr string) {
+			defer wg.Done()
+
+			var maxSlotNum int
+			if err := p.WithRedisClient(addr, func(client *Client) (err error) {
+				maxSlotNum, err = client.GetMaxSlotNum()
+				return err
+			}); err != nil {
+				log.Warnf("[GetMaxSlotNums] can't get slots info for pika '%s', err: '%v'", addr, err)
+				return
+			}
+
+			mutex.Lock()
+			m[addr] = maxSlotNum
 			mutex.Unlock()
 		}(pikaAddr)
 	}

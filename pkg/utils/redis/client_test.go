@@ -26,13 +26,13 @@ func TestSlaveOf(t *testing.T) {
 
 	slaveOfAllSlotsAsync := func(masterAddr, slaveAddr string, slaveSlots []int, force bool) error {
 		return p.WithRedisClient(slaveAddr, func(client *Client) error {
-			return client.SlaveOfAllSlots(masterAddr, slaveSlots, force)
+			return client.SlaveOfAllSlots(masterAddr, slaveSlots, force, false)
 		})
 	}
 
 	slaveOfSlotsAsync := func(masterAddr, slaveAddr string, sg pika.SlotGroup, force bool) error {
 		return p.WithRedisClient(slaveAddr, func(client *Client) error {
-			return client.SlaveOfSlots(masterAddr, sg, force)
+			return client.SlaveOfSlots(masterAddr, sg, force, false)
 		})
 	}
 

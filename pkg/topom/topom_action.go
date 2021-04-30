@@ -264,7 +264,8 @@ func (s *Topom) ProcessSyncAction() error {
 	if err != nil || exec == nil {
 		return err
 	}
-	return s.SyncActionComplete(addr, exec() != nil)
+	failed := exec() != nil
+	return s.SyncActionComplete(addr, failed)
 }
 
 type Prerequisite func(*context, *models.SlotMapping) (_ error, needsRollback bool)
