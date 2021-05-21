@@ -280,6 +280,9 @@ func (c *Client) BecomeMasterAllSlots() error {
 	if err != nil {
 		return errors.Trace(err)
 	}
+	if len(slotsInfo) == 0 {
+		return nil
+	}
 	_ = c.ReconnectIfNeeded()
 	if err := c.SlaveOfAllSlots("NO:ONE", slotsInfo.Slots(), false, false); err != nil {
 		return errors.Trace(err)
@@ -553,9 +556,39 @@ func (c *Client) DeleteSlot(slot int) error {
 func (c *Client) GetSlotDBSize(slot int) (int64, error) {
 	slotInfo, err := c.SlotInfo(slot, true)
 	if err != nil {
-		return 0, err
+		if !strings.Contains(err.Error(), "Err unknown or unsupported command") {
+			return 0, err
+		}
+		log.Warnf("[GetSlotDBSize] pkcluster infofull command not supported, use GetDBSize() instead")
+		_ = c.ReconnectIfNeeded()
+		dbSize, err := c.GetDBSize()
+		if err != nil {
+			return 0, err
+		}
+		slotsInfo, err := c.PkSlotsInfo()
+		if err != nil {
+			return 0, err
+		}
+		log.Warnf("[GetSlotDBSize] total db size %v, slots: %v", dbSize, slotsInfo.Slots())
+		return dbSize / int64(len(slotsInfo)), nil
 	}
 	return slotInfo.DBSize, nil
+}
+
+func (c *Client) GetDBSize() (int64, error) {
+	infos, err := c.Info()
+	if err != nil {
+		return 0, err
+	}
+	dbSizeStr, ok := infos["db_size"]
+	if !ok {
+		return 0, fmt.Errorf("db_size not found")
+	}
+	dbSize, err := strconv.ParseInt(dbSizeStr, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid db_size: '%s'", dbSizeStr)
+	}
+	return dbSize, nil
 }
 
 func (c *Client) CompactSlot(slot int) error {

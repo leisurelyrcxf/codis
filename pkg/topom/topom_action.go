@@ -201,7 +201,9 @@ func (s *Topom) transitionSlotStateInternal(ctx *context, m *models.SlotMapping,
 	}
 
 	if actionErr := action(ctx, m); actionErr != nil {
+		lastCompact := m.Action.Info.LastCompact
 		*m = original
+		m.Action.Info.LastCompact = lastCompact
 		log.Errorf("[transitionSlotStateInternal] slot-[%d] action of slot %s failed, err: '%v'", m.Id, m, actionErr)
 		return actionErr
 	}
