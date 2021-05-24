@@ -871,7 +871,7 @@ func (s *Topom) watchSlot(ctx *context, m *models.SlotMapping) error {
 		return nil
 	}
 	targetPikaAddrs := ctx.getGroupMasterSlaves(m.Action.TargetId)
-	if m.Action.Info.LastCompact == nil || time.Since(*m.Action.Info.LastCompact) >= time.Minute {
+	if m.Action.Info.LastCompact == nil || time.Since(*m.Action.Info.LastCompact) >= time.Second*150 {
 		_ = s.action.redisp.CompactSlot(targetPikaAddrs, m.Id)
 		m.UpdateLastCompact()
 	}
