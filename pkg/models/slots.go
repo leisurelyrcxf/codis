@@ -142,11 +142,13 @@ type SlotMapping struct {
 		TargetId         int    `json:"target_id,omitempty"`
 		Resharding       bool   `json:"resharding,omitempty"`
 		SourceMaxSlotNum int    `json:"source_max_slot_num,omitempty"`
+		TargetMaxSlotNum int    `json:"target_max_slot_num,omitempty"`
 
 		Info struct {
 			SourceMaster string                 `json:"source_master,omitempty"`
 			TargetMaster string                 `json:"target_master,omitempty"`
 			StateStart   *time.Time             `json:"state_start,omitempty"`
+			LastCompact  *time.Time             `json:"last_compact,omitempty"`
 			Progress     *SlotMigrationProgress `json:"progress,omitempty"`
 		} `json:"info"`
 	} `json:"action"`
@@ -184,6 +186,12 @@ func (m *SlotMapping) UpdateStateStart() *SlotMapping {
 	return m
 }
 
+func (m *SlotMapping) UpdateLastCompact() *SlotMapping {
+	t := time.Now()
+	m.Action.Info.LastCompact = &t
+	return m
+}
+
 func (m *SlotMapping) ClearAction() *SlotMapping {
 	*m = SlotMapping{
 		Id:      m.Id,
@@ -198,6 +206,7 @@ func (m *SlotMapping) ClearActionInfo() *SlotMapping {
 		SourceMaster string                 `json:"source_master,omitempty"`
 		TargetMaster string                 `json:"target_master,omitempty"`
 		StateStart   *time.Time             `json:"state_start,omitempty"`
+		LastCompact  *time.Time             `json:"last_compact,omitempty"`
 		Progress     *SlotMigrationProgress `json:"progress,omitempty"`
 	}{}
 	return m

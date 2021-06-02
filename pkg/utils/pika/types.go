@@ -22,7 +22,8 @@ var (
 	ErrCantGetPikaSlotsInfo = errors.New("can't get pika slots info, probably down")
 
 	InvalidSlotInfo = SlotInfo{
-		Slot: -1,
+		Slot:   -1,
+		DBSize: math.MaxInt64,
 	}
 
 	InvalidSlaveReplInfo = func(addr string) SlaveReplInfo {
@@ -104,6 +105,8 @@ type SlotInfo struct {
 
 	BinlogOffset
 
+	DBSize int64
+
 	Role Role
 
 	// If Role.IsSlave()
@@ -115,7 +118,7 @@ type SlotInfo struct {
 
 // NewSlotInfo generates slot info for newly created slot.
 func NewSlotInfo(slot int) SlotInfo {
-	return SlotInfo{Slot: slot}
+	return SlotInfo{Slot: slot, DBSize: math.MaxInt64}
 }
 
 // HasSlaves return if this slot has slaves
@@ -211,6 +214,7 @@ func (i SlotInfo) BecomeMaster() SlotInfo {
 	return SlotInfo{
 		Slot:           i.Slot,
 		BinlogOffset:   i.BinlogOffset,
+		DBSize:         i.DBSize,
 		Role:           i.Role.DeSlave(),
 		MasterAddr:     "",
 		SlaveReplInfos: i.SlaveReplInfos,
@@ -222,6 +226,7 @@ func (i SlotInfo) UnlinkSlaves() SlotInfo {
 	return SlotInfo{
 		Slot:           i.Slot,
 		BinlogOffset:   i.BinlogOffset,
+		DBSize:         i.DBSize,
 		Role:           i.Role.DeMaster(),
 		MasterAddr:     i.MasterAddr,
 		SlaveReplInfos: nil,

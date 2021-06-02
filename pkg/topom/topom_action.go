@@ -201,7 +201,9 @@ func (s *Topom) transitionSlotStateInternal(ctx *context, m *models.SlotMapping,
 	}
 
 	if actionErr := action(ctx, m); actionErr != nil {
+		lastCompact := m.Action.Info.LastCompact
 		*m = original
+		m.Action.Info.LastCompact = lastCompact
 		log.Errorf("[transitionSlotStateInternal] slot-[%d] action of slot %s failed, err: '%v'", m.Id, m, actionErr)
 		return actionErr
 	}
@@ -264,7 +266,8 @@ func (s *Topom) ProcessSyncAction() error {
 	if err != nil || exec == nil {
 		return err
 	}
-	return s.SyncActionComplete(addr, exec() != nil)
+	failed := exec() != nil
+	return s.SyncActionComplete(addr, failed)
 }
 
 type Prerequisite func(*context, *models.SlotMapping) (_ error, needsRollback bool)

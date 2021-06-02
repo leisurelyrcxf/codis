@@ -6,6 +6,8 @@ package topom
 import (
 	"time"
 
+	"github.com/CodisLabs/codis/pkg/utils/pika"
+
 	"github.com/CodisLabs/codis/pkg/models"
 	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/log"
@@ -332,7 +334,7 @@ func (s *Topom) GroupPromoteServer(gid int, addr string) error {
 			log.WarnErrorf(err, "create redis client to %s failed", master)
 		} else {
 			defer c.Close()
-			if err := c.SetMaster("NO:ONE", false); err != nil {
+			if err := c.BecomeMasterAllSlots(); err != nil {
 				log.WarnErrorf(err, "redis %s set master to NO:ONE failed", master)
 			}
 		}
@@ -610,21 +612,11 @@ func (s *Topom) newSyncActionExecutor(addr string) (func() error, error) {
 		return nil, nil
 	}
 
-	var master = "NO:ONE"
-	if index != 0 {
-		master = g.Servers[0].Addr
+	slotsInfo, err := s.action.redisp.GetPikaSlotsInfo(addr)
+	if err != nil {
+		return nil, err
 	}
 	return func() error {
-		c, err := redis.NewClient(addr, s.config.ProductAuth, time.Minute*30)
-		if err != nil {
-			log.WarnErrorf(err, "create redis client to %s failed", addr)
-			return err
-		}
-		defer c.Close()
-		if err := c.SetMaster(master, false); err != nil { // TODO make force opt configurable
-			log.WarnErrorf(err, "redis %s set master to %s failed", addr, master)
-			return err
-		}
-		return nil
+		return s.SlaveOfMaster(addr, pika.SlotsInfo(slotsInfo).Slots(), pika.SlaveOfMayForce)
 	}, nil
 }

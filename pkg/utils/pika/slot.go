@@ -7,10 +7,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/CodisLabs/codis/pkg/utils/log"
-
 	"github.com/CodisLabs/codis/pkg/utils/errors"
+	"github.com/CodisLabs/codis/pkg/utils/log"
 )
+
+const MaxReshardingReplicationConflateCoef = 1.2
 
 var (
 	// ErrInvalidSlotGroup invalid slot group
@@ -230,7 +231,7 @@ func (ss SlotsReplState) SplitConnectedAndNonConnected() (connectedSlots, nonCon
 }
 
 func ParseAlreadyLinkedErrMsg(msg string) (SlotsReplState, error) {
-	lines := trimmedSplit(msg, "||")
+	lines := TrimmedSplit(msg, "||")
 	if len(lines) == 0 {
 		return nil, errors.Errorf("ParseAlreadyLinkedErrMsg: no lines exist")
 	}

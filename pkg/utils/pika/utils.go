@@ -25,6 +25,8 @@ var (
 	ErrSlaveReplInfoIsNil = errors.New("slave repl info is nil")
 	// ErrInvalidSlotOffset invalid slot offset
 	ErrInvalidSlotOffset = errors.New("invalid slot offset")
+	// ErrInvalidDBSize invalid db size
+	ErrInvalidDBSize = errors.New("invalid db size")
 	// ErrNotSlaveButHaveMaster invalid master info error
 	ErrNotSlaveButHaveMaster = errors.New("not slave but have master address info")
 	// ErrNotMasterButHaveSlaves invalid master info error
@@ -39,7 +41,7 @@ var (
 func ParseSlotsInfo(slotsInfoString string) (slotInfos SlotsInfo, err error) {
 	slotInfos = make(map[int]SlotInfo)
 
-	slotInfoStrings := trimmedSplit(slotsInfoString, "\r\n\r\n")
+	slotInfoStrings := TrimmedSplit(slotsInfoString, "\r\n\r\n")
 	for _, slotInfoString := range slotInfoStrings {
 		slotInfo, err := ParseSlotInfo(slotInfoString)
 		if err != nil {
@@ -54,6 +56,10 @@ func ParseSlotsInfo(slotsInfoString string) (slotInfos SlotsInfo, err error) {
 // parseSlotInfo parse slot info string, example slot info string:
 // "(db0:0) binlog_offset=0 0,safety_purge=none\r\n\r\n(db0:1) binlog_offset=0 0,safety_purge=none\r\n  Role: Slave\r\n  master: 10.213.20.33:9200"
 func ParseSlotInfo(slotInfoString string) (info SlotInfo, err error) {
+	return ParseSlotInfoRaw(slotInfoString, false)
+}
+
+func ParseSlotInfoRaw(slotInfoString string, full bool) (info SlotInfo, err error) {
 	if strings.TrimSpace(slotInfoString) == "" {
 		return InvalidSlotInfo, ErrSlotNotExists
 	}
@@ -62,8 +68,9 @@ func ParseSlotInfo(slotInfoString string) (info SlotInfo, err error) {
 	info.Slot = -1
 	info.FileNum = math.MaxUint64
 	info.Offset = math.MaxUint64
+	info.DBSize = math.MaxInt64
 
-	items := trimmedSplit(slotInfoString, "\r\n")
+	items := TrimmedSplit(slotInfoString, "\r\n")
 	var slaveReplInfo *SlaveReplInfo
 	for _, item := range items {
 		colonIndex := strings.Index(item, ":")
@@ -109,7 +116,7 @@ func ParseSlotInfo(slotInfoString string) (info SlotInfo, err error) {
 			slaveReplInfo.Status = ParseSlaveBinlogStatus(value)
 		case "(db0":
 			// "111) binlog_offset=0 0,safety_purge=none"
-			slotInfoParts := trimmedSplit(value, ")")
+			slotInfoParts := TrimmedSplit(value, ")")
 			if len(slotInfoParts) < 2 { // nolint:gomnd
 				log.Errorf("[parseSlotInfo] expect 2 parts of slotInfo, but met %v", slotInfoParts)
 				return info, genErrInvalidSlotInfo(errors.New(fmt.Sprintf("len(slotInfoParts) < 2(value: '%s')", value)))
@@ -122,28 +129,36 @@ func ParseSlotInfo(slotInfoString string) (info SlotInfo, err error) {
 			}
 			info.Slot = int(slotInt64)
 
-			binlogS := trimmedSplit(value, ",")[0] // "binlog_offset=0 0"
-			binlogParts := trimmedSplit(binlogS, "=")
-			if len(binlogParts) != 2 { // nolint:gomnd
-				log.Errorf("[parseSlotInfo] expecting 2 parts of binlog_offset, but met %v", binlogParts)
-				return info, genErrInvalidSlotInfo(ErrInvalidSlotOffset)
-			}
+			details := TrimmedSplit(value, ",") // "binlog_offset=1193 9289158,db_size=12180836797,safety_purge=write2file1183"
+			for _, detail := range details {
+				kv := TrimmedSplit(detail, "=")
+				if len(kv) != 2 {
+					continue
+				}
+				key, value := kv[0], kv[1]
+				if key == "binlog_offset" {
+					fileNumOffsetS := value
+					fileNumOffsetParts := TrimmedSplit(fileNumOffsetS, " ")
+					if len(fileNumOffsetParts) != 2 { // nolint:gomnd
+						log.Errorf("[parseSlotInfo] expecting 2 parts of fileNumOffset string, but met %v", fileNumOffsetParts)
+						return info, genErrInvalidSlotInfo(ErrInvalidSlotOffset)
+					}
 
-			fileNumOffsetS := binlogParts[1] // "0 0"
-			fileNumOffsetParts := trimmedSplit(fileNumOffsetS, " ")
-			if len(fileNumOffsetParts) != 2 { // nolint:gomnd
-				log.Errorf("[parseSlotInfo] expecting 2 parts of fileNumOffset string, but met %v", fileNumOffsetParts)
-				return info, genErrInvalidSlotInfo(ErrInvalidSlotOffset)
-			}
-
-			fileNumS, offsetS := fileNumOffsetParts[0], fileNumOffsetParts[1]
-			if info.FileNum, err = strconv.ParseUint(fileNumS, 10, 64); err != nil {
-				log.Errorf("[parseSlotInfo] file number parse failed, file number string: '%s', err: '%v'", fileNumS, err)
-				return info, err
-			}
-			if info.Offset, err = strconv.ParseUint(offsetS, 10, 64); err != nil {
-				log.Errorf("[parseSlotInfo] offset parse failed, offset string: '%s', err: '%v'", offsetS, err)
-				return info, err
+					fileNumS, offsetS := fileNumOffsetParts[0], fileNumOffsetParts[1]
+					if info.FileNum, err = strconv.ParseUint(fileNumS, 10, 64); err != nil {
+						log.Errorf("[parseSlotInfo] file number parse failed, file number string: '%s', err: '%v'", fileNumS, err)
+						return info, err
+					}
+					if info.Offset, err = strconv.ParseUint(offsetS, 10, 64); err != nil {
+						log.Errorf("[parseSlotInfo] offset parse failed, offset string: '%s', err: '%v'", offsetS, err)
+						return info, err
+					}
+				} else if key == "db_size" {
+					if info.DBSize, err = strconv.ParseInt(value, 10, 64); err != nil {
+						log.Errorf("[parseSlotInfo] db_size parse failed, db_size string: '%s', err: '%v'", value, err)
+						return info, err
+					}
+				}
 			}
 		case "Role":
 			info.Role.Update(ParseRole(value))
@@ -175,6 +190,9 @@ func ParseSlotInfo(slotInfoString string) (info SlotInfo, err error) {
 		log.Errorf("[parseSlotInfo] can't parse slot binlog offset")
 		return info, genErrInvalidSlotInfo(ErrInvalidSlotOffset)
 	}
+	if full && info.DBSize == math.MaxInt64 {
+		return info, genErrInvalidSlotInfo(ErrInvalidDBSize)
+	}
 	if len(info.SlaveReplInfos) != slotConnectedSlaves {
 		err := errors.Errorf("len(info.SlaveReplInfos)(%d) != slotConnectedSlaves(%d)", len(info.SlaveReplInfos), slotConnectedSlaves)
 		log.Errorf("[parseSlotInfo] %v", err)
@@ -196,7 +214,7 @@ func ParseSlotInfo(slotInfoString string) (info SlotInfo, err error) {
 	return info, nil
 }
 
-func trimmedSplit(str string, sep string) []string {
+func TrimmedSplit(str string, sep string) []string {
 	parts := strings.Split(str, sep)
 	trimmedParts := make([]string, 0, len(parts))
 	for _, part := range parts {

@@ -550,6 +550,11 @@ func (s *Topom) SlaveOfMaster(addr string, slots []int, slaveOfForceOpt pika.Sla
 	if !ok {
 		return errors.Errorf("can't get slave %s slots info", addr)
 	}
+	addr2MaxSlotNum := s.action.redisp.GetMaxSlotNums(append(masterAddrs, addr))
+	slaveMaxSlotNum := addr2MaxSlotNum[addr]
+	if slaveMaxSlotNum == 0 {
+		return errors.Errorf("can't get slave %s max slot num", addr)
+	}
 
 	for _, j := range jobs {
 		if j.Err != nil {
@@ -626,14 +631,22 @@ func (s *Topom) SlaveOfMaster(addr string, slots []int, slaveOfForceOpt pika.Sla
 			err = errors.Wrap(err, func(k pika.SlaveOfMasterJobKey, g pika.SlaveOfMasterJobs) error {
 				jbgSlots := g.Slots()
 				if math2.EqualInts(slaveSlots, jbgSlots) {
-					return client.SlaveOfAllSlots(k.MasterAddr, jbgSlots, k.Force)
+					masterMaxSlotNum := addr2MaxSlotNum[k.MasterAddr]
+					if masterMaxSlotNum == 0 {
+						return errors.Errorf("can't get master %s max slot num", k.MasterAddr)
+					}
+					return client.SlaveOfAllSlots(k.MasterAddr, jbgSlots, k.Force, slaveMaxSlotNum > masterMaxSlotNum)
 				}
 				var slaveOfErr error
 				for _, sg := range pika.GroupedSlots(jbgSlots) {
 					if connErr := client.ReconnectIfNeeded(); connErr != nil {
 						return errors.Wrap(slaveOfErr, connErr)
 					}
-					slaveOfErr = errors.Wrap(slaveOfErr, client.SlaveOfSlots(k.MasterAddr, sg, k.Force))
+					masterMaxSlotNum := addr2MaxSlotNum[k.MasterAddr]
+					if masterMaxSlotNum == 0 {
+						return errors.Errorf("can't get master %s max slot num", k.MasterAddr)
+					}
+					slaveOfErr = errors.Wrap(slaveOfErr, client.SlaveOfSlots(k.MasterAddr, sg, k.Force, slaveMaxSlotNum > masterMaxSlotNum))
 				}
 				return slaveOfErr
 			}(k, g))
