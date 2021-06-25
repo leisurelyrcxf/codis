@@ -386,7 +386,7 @@ func (t *cmdDashboard) handleProxyCommand(d map[string]interface{}) {
 
 		for _, token := range t.parseProxyTokens(d) {
 			log.Debugf("call rpc remove-proxy to dashboard %s", t.addr)
-			if err := c.RemoveProxy(token, force, false); err != nil {
+			if err := c.RemoveProxy(token, force); err != nil {
 				log.PanicErrorf(err, "call rpc remove-proxy to dashboard %s failed", t.addr)
 			}
 			log.Debugf("call rpc remove-proxy OK")

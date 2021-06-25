@@ -106,7 +106,7 @@ func TestApiProxy(x *testing.T) {
 
 	assert.MustNoError(c.CreateProxy(p.AdminAddr))
 	assert.MustNoError(c.ReinitProxy(p.Token))
-	assert.MustNoError(c.RemoveProxy(p.Token, false, false))
+	assert.MustNoError(c.RemoveProxy(p.Token, false))
 }
 
 func TestSlaveOfMaster(t *testing.T) {
