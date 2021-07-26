@@ -175,15 +175,8 @@ Options:
 		log.Warnf("[%p] dashboard receive signal = '%v'", s, sig)
 	}()
 
-	for i := 0; !s.IsClosed() && !s.IsOnline(); i++ {
-		if err := s.Start(true); err != nil {
-			if i <= 15 {
-				log.Warnf("[%p] dashboard online failed [%d]", s, i)
-			} else {
-				log.Panicf("dashboard online failed, give up & abort :'(")
-			}
-			time.Sleep(time.Second * 2)
-		}
+	if err := s.Start(true); err != nil {
+		log.Panicf("dashboard start failed: '%v'", err)
 	}
 
 	log.Warnf("[%p] dashboard is working ...", s)

@@ -5,6 +5,7 @@ package topom
 
 import (
 	"container/list"
+	gocontext "context"
 	"fmt"
 	"net"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/CodisLabs/codis/pkg/models/common"
 	"github.com/CodisLabs/codis/pkg/utils/pika"
 
 	"github.com/CodisLabs/codis/pkg/proxy"
@@ -47,6 +49,8 @@ const (
 type Topom struct {
 	mu sync.Mutex
 
+	common.RoleState
+
 	xauth string
 	model *models.Topom
 	store *models.Store
@@ -63,9 +67,10 @@ type Topom struct {
 		C chan struct{}
 	}
 
-	config *Config
-	online bool
-	closed bool
+	config           *Config
+	online           bool
+	onlineUpdateTime time.Time
+	closed           bool
 
 	ladmin net.Listener
 
@@ -109,6 +114,7 @@ func New(client models.Client, config *Config) (*Topom, error) {
 		return nil, errors.Trace(err)
 	}
 	s := &Topom{}
+	s.RoleState = common.NewRoleState()
 	s.config = config
 	s.exit.C = make(chan struct{})
 	s.action.redisp = redis.NewPool(config.ProductAuth, config.MigrationTimeout.Duration())
@@ -147,6 +153,45 @@ func New(client models.Client, config *Config) (*Topom, error) {
 	go s.serveAdmin()
 
 	return s, nil
+}
+
+func (s *Topom) SetMaster() {
+	old_, new_, success := s.RoleState.SetMaster(time.Now())
+	if !success {
+		return
+	}
+	if new_.Different(old_) {
+		go s.updateOnline(new_)
+		log.Warnf("[Topom] role set to master")
+	}
+}
+
+func (s *Topom) SetSlave(masterAddr string) {
+	old_, new_, success := s.RoleState.SetSlave(masterAddr, time.Now())
+	if !success {
+		return
+	}
+	if new_.Different(old_) {
+		go s.updateOnline(new_)
+		if masterAddr == "" {
+			log.Errorf("[Topom] role set to slave of no master")
+		} else {
+			log.Warnf("[Topom] role set to slave of master %s", masterAddr)
+		}
+	}
+}
+
+func (s *Topom) updateOnline(role *common.RoleWithMaster) {
+	s.mu.Lock()
+	if role.Timestamp.After(s.onlineUpdateTime) {
+		if role.Role == common.RoleMaster || role.MasterAddr != "" {
+			s.online = true
+		} else {
+			s.online = false
+		}
+		s.onlineUpdateTime = role.Timestamp
+	}
+	s.mu.Unlock()
 }
 
 func (s *Topom) setup(config *Config) error {
@@ -226,20 +271,73 @@ func (s *Topom) Start(routines bool) error {
 	}
 	if s.online {
 		return nil
-	} else {
-		var w <-chan struct{}
-		var err error
-		if w, err = s.store.AcquireEphemeral(s.model); err != nil {
-			log.ErrorErrorf(err, "store: acquire lock of %s failed", s.config.ProductName)
-			return errors.Errorf("store: acquire lock of %s failed", s.config.ProductName)
-		}
-		s.online = true
+	}
 
-		go func() {
-			<-w
-			log.Warnf("[Start] Refresh distributed lock failed, close topom...")
-			_ = s.Close()
-		}()
+	goCtx, goCancel := gocontext.WithCancel(gocontext.Background())
+	go func() {
+		<-s.exit.C
+		goCancel()
+	}()
+
+	go func() {
+		err := models.WithLocked(
+			goCtx,
+			s.store.Client(), s.store.LockPath(), s.model.Encode(),
+			common.LockConfig{
+				TTL:                 25, // TODO make this configurable
+				SpinIntervalOnError: time.Second,
+				WatchPeriod:         time.Minute,
+			}, common.UserCallbacks{
+				OnData: func(data []byte) error {
+					prev, decodeErr := models.DecodeTopom(data)
+					if decodeErr != nil {
+						log.ErrorErrorf(decodeErr, "decode topom data failed, prev data: '%v', err: '%v'", data, decodeErr)
+						return decodeErr
+					}
+					prevAddr := prev.GetAdminAddr()
+					if prevAddr == "" {
+						return errors.New("prevAddr is empty")
+					}
+					if prevAddr == s.model.GetAdminAddr() {
+						return errors.Errorf("reenter lock %s", s.store.LockPath())
+					}
+					s.SetSlave(prevAddr)
+					return nil
+				},
+				OnErr: func(desc, reason error) (kontinue bool) {
+					s.SetSlave("")
+					if desc == common.ErrLockExpired {
+						log.Errorf("lock expired, unsafe to continue, closing topom...")
+						go s.Close()
+					} else if desc == common.ErrLockDefinitelyExpired {
+						log.Errorf("topom not closed with in safe period, exit...")
+						os.Exit(2)
+					}
+					return true
+				},
+				//BeforeKeepAliveOnce: func(ctx gocontext.Context, lease *common.Lease, ttl int64) (kontinue bool) {
+				//	return lease.GrantTime.Add(time.Duration(ttl) * time.Second / 2).After(time.Now())
+				//},
+			}, func(lockCtx gocontext.Context) error {
+				select {
+				case <-lockCtx.Done():
+				default:
+					s.SetMaster()
+					<-lockCtx.Done()
+				}
+				s.SetSlave("")
+				time.Sleep(time.Minute) // don't unlock.
+				return lockCtx.Err()
+			})
+		assert.Must(err != nil)
+		log.Errorf("topom WithLocked failed: %v", err)
+	}()
+
+	for i := 0; !s.IsOnline(); i++ {
+		if i >= 15 {
+			return errors.New("dashboard online failed, give up & abort :'(")
+		}
+		time.Sleep(time.Second * 2)
 	}
 
 	if !routines {
@@ -253,7 +351,7 @@ func (s *Topom) Start(routines bool) error {
 
 	go func() {
 		for !s.IsClosed() {
-			if s.IsOnline() {
+			if s.IsOnline() && s.IsMaster() {
 				w, _ := s.RefreshRedisStats(time.Second)
 				if w != nil {
 					w.Wait()
@@ -265,7 +363,7 @@ func (s *Topom) Start(routines bool) error {
 
 	go func() {
 		for !s.IsClosed() {
-			if s.IsOnline() {
+			if s.IsOnline() && s.IsMaster() {
 				w, _ := s.RefreshProxyStats(time.Second)
 				if w != nil {
 					w.Wait()
@@ -277,7 +375,7 @@ func (s *Topom) Start(routines bool) error {
 
 	go func() {
 		for !s.IsClosed() {
-			if s.IsOnline() {
+			if s.IsOnline() && s.IsMaster() {
 				if err := s.ProcessSlotAction(); err != nil && !strings.Contains(err.Error(), pika.ErrMsgLagNotMatch) {
 					log.WarnErrorf(err, "process slot action failed: %v", err)
 					time.Sleep(time.Second * 5)
@@ -291,7 +389,7 @@ func (s *Topom) Start(routines bool) error {
 
 	go func() {
 		for !s.IsClosed() {
-			if s.IsOnline() {
+			if s.IsOnline() && s.IsMaster() {
 				if err := s.ProcessSyncAction(); err != nil {
 					log.WarnErrorf(err, "process sync action failed")
 					time.Sleep(time.Second * 5)
@@ -1158,7 +1256,7 @@ func (p *Topom) startMetricsReporter(d time.Duration, do func() error, cleanup f
 		}
 		for !p.IsClosed() {
 			<-ticker.C
-			if !p.IsOnline() {
+			if !p.IsOnline() || !p.IsMaster() {
 				delay.SleepWithCancel(p.IsClosed)
 				continue
 			}

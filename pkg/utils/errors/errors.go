@@ -89,12 +89,12 @@ func NotEqual(err1, err2 error) bool {
 	return !Equal(err1, err2)
 }
 
-func Wrap(err, other error) error {
-	if err == nil {
-		return other
+func Wrap(err1, err2 error) error {
+	if err1 == nil {
+		return err2
 	}
-	if other == nil {
-		return err
+	if err2 == nil {
+		return err1
 	}
-	return Errorf("%v: %v", err, other)
+	return Errorf("%v: %v", err1, err2)
 }

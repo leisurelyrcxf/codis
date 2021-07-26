@@ -1,8 +1,7 @@
 .DEFAULT_GOAL := build-all
 
-export GO15VENDOREXPERIMENT=1
-
 build-all: codis-dashboard codis-proxy codis-admin codis-ha codis-fe clean-gotest
+MINIMUM_SUPPORTED_GO_MAJOR_VERSION = 13
 
 codis-deps:
 	echo "GO_MAJOR_VERSION: $(GO_MAJOR_VERSION)"

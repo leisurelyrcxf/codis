@@ -64,6 +64,14 @@ func LoadTopom(client Client, product string, must bool) (*Topom, error) {
 	if err != nil || b == nil {
 		return nil, err
 	}
+	return DecodeTopom(b)
+}
+
+func DecodeTopom(b []byte) (*Topom, error) {
+	if len(b) == 0 {
+		return nil, errors.Errorf("topom data is empty, data: %v", b)
+	}
+
 	t := &Topom{}
 	if err := jsonDecode(t, b); err != nil {
 		return nil, err

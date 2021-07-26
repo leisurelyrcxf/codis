@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CodisLabs/codis/pkg/models/common"
 	"github.com/CodisLabs/codis/pkg/utils/assert"
 	"github.com/CodisLabs/codis/pkg/utils/errors"
 	"github.com/CodisLabs/codis/pkg/utils/log"
@@ -75,8 +76,8 @@ func TestClient_CreateReadDelete(t *testing.T) {
 	}
 
 	err = c.Create(key, []byte("xxx"))
-	if err != ErrKeyAlreadyExists {
-		t.Errorf("expect error 'ErrKeyAlreadyExists' while creating key '%s', but met '%v'", key, err)
+	if err != common.ErrKeyAlreadyExists {
+		t.Errorf("expect error 'common.ErrKeyAlreadyExists' while creating key '%s', but met '%v'", key, err)
 		return
 	}
 
@@ -317,7 +318,7 @@ func TestClient_CreateEphemeral(t *testing.T) {
 		return
 	}
 	go func() {
-		for !c.isClosed() {
+		for !c.IsClosed() {
 			valRead, err := c.Read(key, true)
 			if err != nil {
 				if err.(*errors.TracedError).Cause != ErrClosedClient {
@@ -333,7 +334,7 @@ func TestClient_CreateEphemeral(t *testing.T) {
 	}()
 
 	ch2, err := c.CreateEphemeral(key, []byte(val))
-	if err != ErrKeyAlreadyExists {
+	if err != common.ErrKeyAlreadyExists {
 		t.Errorf("expect error '%s', but met '%v'", ErrKeyNotExists.Error(), err)
 		return
 	}
