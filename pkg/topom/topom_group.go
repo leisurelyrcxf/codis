@@ -4,6 +4,7 @@
 package topom
 
 import (
+	"math"
 	"time"
 
 	"github.com/CodisLabs/codis/pkg/utils/pika"
@@ -323,11 +324,27 @@ func (s *Topom) groupPromoteServer(gid int) error {
 		return errors.Errorf("can't promote master of group %d", g.Id)
 	}
 
+	var masterDown = false
+
 	switch g.Promoting.State {
 	case models.ActionNothing:
 		return nil
 
 	case models.ActionPending:
+		defer s.dirtyGroupCache(g.Id)
+
+		log.Warnf("group-[%d] in state pending", g.Id)
+
+		slots := ctx.getSlotMappingsByGroupId(g.Id)
+
+		g.Promoting.State = models.ActionPreparing
+		if err := s.resyncSlotMappings(ctx, slots...); err != nil {
+			return err
+		}
+		if err := s.storeUpdateGroup(g); err != nil {
+			return err
+		}
+
 		fallthrough
 
 	case models.ActionPreparing:
@@ -336,9 +353,13 @@ func (s *Topom) groupPromoteServer(gid int) error {
 
 		log.Warnf("group-[%d] resync to preparing", g.Id)
 
-		slots := ctx.getSlotMappingsByGroupId(g.Id)
+		_ = s.slaveLagsOK(ctx, g, &masterDown, g.Servers[g.Promoting.Index].Addr,
+			math.MaxUint64, true, func(string, bool) error {
+				return nil
+			})
 
 		g.Promoting.State = models.ActionWatching
+		slots := ctx.getSlotMappingsByGroupId(g.Id)
 		if err := s.resyncSlotMappings(ctx, slots...); err != nil {
 			log.Warnf("group-[%d] resync-rollback to preparing due to error: %v", g.Id, err)
 			g.Promoting.State = models.ActionPreparing
@@ -358,9 +379,7 @@ func (s *Topom) groupPromoteServer(gid int) error {
 
 		log.Warnf("group-[%d] in state watching", g.Id)
 
-		slots := ctx.getSlotMappingsByGroupId(g.Id)
-
-		if err := s.slaveLagsOK(ctx, g, g.Servers[g.Promoting.Index].Addr, s.GetSlotActionGap(),
+		if err := s.slaveLagsOK(ctx, g, &masterDown, g.Servers[g.Promoting.Index].Addr, s.GetSlotActionGap(), false,
 			func(slaveAddr string, needsCheckSlaveAliveness bool) error {
 				if !needsCheckSlaveAliveness {
 					return nil
@@ -372,6 +391,7 @@ func (s *Topom) groupPromoteServer(gid int) error {
 		}
 
 		g.Promoting.State = models.ActionPrepared
+		slots := ctx.getSlotMappingsByGroupId(g.Id)
 		if err := s.resyncSlotMappings(ctx, slots...); err != nil {
 			log.Warnf("group-[%d] resync-rollback to watching due to error: %v", g.Id, err)
 			g.Promoting.State = models.ActionWatching
@@ -391,10 +411,7 @@ func (s *Topom) groupPromoteServer(gid int) error {
 		defer s.dirtyGroupCache(g.Id)
 
 		log.Warnf("group-[%d] in state prepared", g.Id)
-
-		slots := ctx.getSlotMappingsByGroupId(g.Id)
-
-		if err := s.slaveLagsOK(ctx, g, g.Servers[g.Promoting.Index].Addr, 0, func(slaveAddr string, _ bool) error {
+		if err := s.slaveLagsOK(ctx, g, &masterDown, g.Servers[g.Promoting.Index].Addr, 0, false, func(slaveAddr string, _ bool) error {
 			return s.action.redisp.WithRedisClient(slaveAddr, func(c *redis.Client) error {
 				err := c.BecomeMasterAllSlots()
 				if err != nil {
@@ -407,6 +424,7 @@ func (s *Topom) groupPromoteServer(gid int) error {
 		}
 
 		g.Promoting.State = models.ActionPromoting
+		slots := ctx.getSlotMappingsByGroupId(g.Id)
 		if err := s.resyncSlotMappings(ctx, slots...); err != nil {
 			log.Warnf("group-[%d] resync-rollback to prepared due to error: %v", g.Id, err)
 			g.Promoting.State = models.ActionPrepared
@@ -503,27 +521,45 @@ func (s *Topom) groupPromoteServer(gid int) error {
 	}
 }
 
-func (s *Topom) slaveLagsOK(ctx *context, g *models.Group, slaveAddr string, gap uint64,
-	onLagOK func(slaveAddr string, needsCheckSlaveAliveness bool) error) error {
-	slots := ctx.getSlotMappingsByGroupId(g.Id)
-
-	masterAddr := ctx.getGroupMaster(g.Id)
-	if masterAddr == "" {
-		return errors.Errorf("can't find group master for group %d", g.Id)
-	}
-	masterSlotsInfo, err := s.action.redisp.GetPikaSlotsInfo(masterAddr)
-	if err != nil {
+func (s *Topom) slaveLagsOK(ctx *context, g *models.Group, masterDown *bool, slaveAddr string, gap uint64,
+	createReplLinkIfNeeded bool, onLagOK func(slaveAddr string, needsCheckSlaveAliveness bool) error) error {
+	if *masterDown {
 		return onLagOK(slaveAddr, true) // if master is down, then is ok to promote
 	}
 
+	masterAddr := ctx.getGroupMaster(g.Id)
+	if masterAddr == "" {
+		*masterDown = true
+		return onLagOK(slaveAddr, true) // if master is down, then is ok to promote
+	}
+
+	masterSlotsInfo, err := s.action.redisp.GetPikaSlotsInfo(masterAddr)
+	if err != nil {
+		*masterDown = true
+		return onLagOK(slaveAddr, true) // if master is down, then is ok to promote
+	}
+
+	slots := ctx.getSlotMappingsByGroupId(g.Id)
 	for _, m := range slots {
 		masterSlotInfo, ok := masterSlotsInfo[m.Id]
 		if !ok {
 			return errors.Errorf("can't find master slot info for slot %d of group %d", m.Id, g.Id)
 		}
-		if err := masterSlotInfo.GapReached(slaveAddr, gap); err != nil {
-			return errors.Errorf("group %d slot %d gap not ok: %v", g.Id, m.Id, err)
+		slaveReplInfo, slotErr := masterSlotInfo.FindSlaveReplInfo(slaveAddr)
+		if slotErr != nil {
+			if createReplLinkIfNeeded {
+				_ = s.action.redisp.SlaveOfAsync(masterAddr, slaveAddr, m.Id, false, false)
+			}
+			err = errors.Wrap(err, errors.Errorf("%v: slaveAddr:%s,slot:%d", slotErr, slaveAddr, m.Id))
+			continue
 		}
+		if slotErr := slaveReplInfo.GapReached(gap); slotErr != nil {
+			err = errors.Wrap(err, errors.Errorf("%v: slaveAddr:%s,slot:%d", slotErr, slaveAddr, m.Id))
+			continue
+		}
+	}
+	if err != nil {
+		return err
 	}
 	return onLagOK(slaveAddr, len(slots) == 0)
 }
