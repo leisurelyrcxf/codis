@@ -235,3 +235,13 @@ func (m *SlotMapping) copyAndClearProgress() *SlotMapping {
 	tm.Action.Info.Progress = nil
 	return &tm
 }
+
+type SlotMappings []*SlotMapping
+
+func (sms SlotMappings) ToSlots() []int {
+	slots := make([]int, len(sms))
+	for idx, sm := range sms {
+		slots[idx] = sm.Id
+	}
+	return slots
+}

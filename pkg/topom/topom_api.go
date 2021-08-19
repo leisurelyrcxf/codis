@@ -510,7 +510,7 @@ func (s *apiServer) GroupPromoteServer(params martini.Params) (int, string) {
 	if err != nil {
 		return rpc.ApiResponseError(err)
 	}
-	if err := s.topom.GroupPromoteServer(gid, addr); err != nil {
+	if err := s.topom.CreateGroupPromoteAction(gid, addr); err != nil {
 		return rpc.ApiResponseError(err)
 	} else {
 		return rpc.ApiResponseJson("OK")
