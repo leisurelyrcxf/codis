@@ -400,6 +400,24 @@ func (s *Topom) Start(routines bool) error {
 	}()
 
 	go func() {
+		for !s.IsClosed() {
+			if s.IsOnline() {
+				if err := s.ProcessGroupPromoteAction(); err != nil {
+					if strings.Contains(err.Error(), pika.ErrMsgLagNotMatch) {
+						log.Infof("process group promotion lag not ok: %v", err)
+						time.Sleep(time.Millisecond * 100)
+					} else {
+						log.WarnErrorf(err, "process group promotion action failed")
+						time.Sleep(time.Second * 2)
+					}
+				} else {
+					time.Sleep(time.Second)
+				}
+			}
+		}
+	}()
+
+	go func() {
 		// Avoid dead-lock, otherwise no need to put in go-routine.
 		s.collectPrometheusMetrics()
 	}()
@@ -614,6 +632,13 @@ func (s *Topom) SlaveOfMaster(addr string, slots []int, slaveOfForceOpt pika.Sla
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.SlaveOfMasterUnsafe(addr, slots, slaveOfForceOpt)
+}
+
+func (s *Topom) SlaveOfMasterUnsafe(addr string, slots []int, slaveOfForceOpt pika.SlaveOfForceOption) error {
+	if len(slots) == 0 {
+		return nil
+	}
 
 	ctx, err := s.newContext()
 	if err != nil {
@@ -643,7 +668,7 @@ func (s *Topom) SlaveOfMaster(addr string, slots []int, slaveOfForceOpt pika.Sla
 		masterAddrs = append(masterAddrs, j.MasterAddr)
 	}
 
-	addr2SlotsInfo := s.action.redisp.GetPikasSlotInfo(append(masterAddrs, addr))
+	addr2SlotsInfo := s.action.redisp.GetPikasSlotsInfo(append(masterAddrs, addr))
 	slaveSlotsInfo, ok := addr2SlotsInfo[addr]
 	if !ok {
 		return errors.Errorf("can't get slave %s slots info", addr)

@@ -4,6 +4,7 @@
 package topom
 
 import (
+	"math"
 	"time"
 
 	"github.com/CodisLabs/codis/pkg/utils/pika"
@@ -223,9 +224,10 @@ func (s *Topom) GroupDelServer(gid int, addr string) error {
 	return s.storeUpdateGroup(g)
 }
 
-func (s *Topom) GroupPromoteServer(gid int, addr string) error {
+func (s *Topom) CreateGroupPromoteAction(gid int, addr string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	ctx, err := s.newContext()
 	if err != nil {
 		return err
@@ -253,16 +255,92 @@ func (s *Topom) GroupPromoteServer(gid int, addr string) error {
 		return errors.Errorf("slots-migration is running = %d", n)
 	}
 
+	g.Promoting.Index = index
+	g.Promoting.State = models.ActionPending
+
+	defer s.dirtyGroupCache(g.Id)
+	if err := s.storeUpdateGroup(g); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Topom) ProcessGroupPromoteAction() error {
+	for {
+		nextGroupID, err := s.GetNexToPromoteGroup()
+		if err != nil {
+			return err
+		}
+		if nextGroupID <= 0 {
+			return nil
+		}
+		if err := s.groupPromoteServer(nextGroupID); err != nil {
+			return err
+		}
+	}
+}
+
+func (s *Topom) GetNexToPromoteGroup() (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ctx, err := s.newContext()
+	if err != nil {
+		return -1, err
+	}
+
+	for gid, g := range ctx.group {
+		if g.Promoting.State != models.ActionNothing && g.Promoting.State != models.ActionPending {
+			return gid, nil
+		}
+	}
+
+	for gid, g := range ctx.group {
+		if g.Promoting.State == models.ActionPending {
+			return gid, nil
+		}
+	}
+	return -1, nil
+}
+
+func (s *Topom) GroupPromoteServer(gid int, addr string) error {
+	return errors.Errorf("discarded")
+}
+
+func (s *Topom) groupPromoteServer(gid int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ctx, err := s.newContext()
+	if err != nil {
+		return err
+	}
+
+	g, err := ctx.getGroup(gid)
+	if err != nil {
+		return err
+	}
+	if g.Promoting.Index == 0 {
+		return errors.Errorf("can't promote master of group %d", g.Id)
+	}
+
+	var masterDown = false
+
 	switch g.Promoting.State {
-
 	case models.ActionNothing:
+		return nil
 
+	case models.ActionPending:
 		defer s.dirtyGroupCache(g.Id)
 
-		log.Warnf("group-[%d] will promote index = %d", g.Id, index)
+		log.Warnf("group-[%d] in state pending", g.Id)
 
-		g.Promoting.Index = index
+		slots := ctx.getSlotMappingsByGroupId(g.Id)
+
 		g.Promoting.State = models.ActionPreparing
+		if err := s.resyncSlotMappings(ctx, slots...); err != nil {
+			return err
+		}
 		if err := s.storeUpdateGroup(g); err != nil {
 			return err
 		}
@@ -273,13 +351,17 @@ func (s *Topom) GroupPromoteServer(gid int, addr string) error {
 
 		defer s.dirtyGroupCache(g.Id)
 
-		log.Warnf("group-[%d] resync to prepared", g.Id)
+		log.Warnf("group-[%d] resync to preparing", g.Id)
 
+		_ = s.slaveLagsOK(ctx, g, &masterDown, g.Servers[g.Promoting.Index].Addr,
+			math.MaxUint64, true, func(string, bool) error {
+				return nil
+			})
+
+		g.Promoting.State = models.ActionWatching
 		slots := ctx.getSlotMappingsByGroupId(g.Id)
-
-		g.Promoting.State = models.ActionPrepared
 		if err := s.resyncSlotMappings(ctx, slots...); err != nil {
-			log.Warnf("group-[%d] resync-rollback to preparing", g.Id)
+			log.Warnf("group-[%d] resync-rollback to preparing due to error: %v", g.Id, err)
 			g.Promoting.State = models.ActionPreparing
 			s.resyncSlotMappings(ctx, slots...)
 			log.Warnf("group-[%d] resync-rollback to preparing, done", g.Id)
@@ -291,7 +373,72 @@ func (s *Topom) GroupPromoteServer(gid int, addr string) error {
 
 		fallthrough
 
+	case models.ActionWatching:
+
+		defer s.dirtyGroupCache(g.Id)
+
+		log.Warnf("group-[%d] in state watching", g.Id)
+
+		if err := s.slaveLagsOK(ctx, g, &masterDown, g.Servers[g.Promoting.Index].Addr, s.GetSlotActionGap(), false,
+			func(slaveAddr string, needsCheckSlaveAliveness bool) error {
+				if !needsCheckSlaveAliveness {
+					return nil
+				}
+				_, err := s.action.redisp.GetPikaSlotsInfo(slaveAddr)
+				return err
+			}); err != nil {
+			return err
+		}
+
+		g.Promoting.State = models.ActionPrepared
+		slots := ctx.getSlotMappingsByGroupId(g.Id)
+		if err := s.resyncSlotMappings(ctx, slots...); err != nil {
+			log.Warnf("group-[%d] resync-rollback to watching due to error: %v", g.Id, err)
+			g.Promoting.State = models.ActionWatching
+			s.resyncSlotMappings(ctx, slots...)
+			log.Warnf("group-[%d] resync-rollback to watching, done", g.Id)
+			return err
+		}
+		if err := s.storeUpdateGroup(g); err != nil {
+			return err
+		}
+
+		time.Sleep(time.Millisecond * 10)
+		fallthrough
+
 	case models.ActionPrepared:
+
+		defer s.dirtyGroupCache(g.Id)
+
+		log.Warnf("group-[%d] in state prepared", g.Id)
+		if err := s.slaveLagsOK(ctx, g, &masterDown, g.Servers[g.Promoting.Index].Addr, 0, false, func(slaveAddr string, _ bool) error {
+			return s.action.redisp.WithRedisClient(slaveAddr, func(c *redis.Client) error {
+				err := c.BecomeMasterAllSlots()
+				if err != nil {
+					log.WarnErrorf(err, "redis %s set master to NO:ONE failed", slaveAddr)
+				}
+				return err
+			})
+		}); err != nil {
+			return err
+		}
+
+		g.Promoting.State = models.ActionPromoting
+		slots := ctx.getSlotMappingsByGroupId(g.Id)
+		if err := s.resyncSlotMappings(ctx, slots...); err != nil {
+			log.Warnf("group-[%d] resync-rollback to prepared due to error: %v", g.Id, err)
+			g.Promoting.State = models.ActionPrepared
+			s.resyncSlotMappings(ctx, slots...)
+			log.Warnf("group-[%d] resync-rollback to prepared, done", g.Id)
+			return err
+		}
+		if err := s.storeUpdateGroup(g); err != nil {
+			return err
+		}
+
+		fallthrough
+
+	case models.ActionPromoting:
 
 		if p := ctx.sentinel; len(p.Servers) != 0 {
 			defer s.dirtySentinelCache()
@@ -311,6 +458,8 @@ func (s *Topom) GroupPromoteServer(gid int, addr string) error {
 
 		defer s.dirtyGroupCache(g.Id)
 
+		log.Warnf("group-[%d] resync to promoting", g.Id)
+
 		var index = g.Promoting.Index
 		var slice = make([]*models.GroupServer, 0, len(g.Servers))
 		slice = append(slice, g.Servers[index])
@@ -329,16 +478,6 @@ func (s *Topom) GroupPromoteServer(gid int, addr string) error {
 		g.Servers = slice
 		g.Promoting.Index = 0
 
-		var master = slice[0].Addr
-		if c, err := redis.NewClient(master, s.config.ProductAuth, time.Second); err != nil {
-			log.WarnErrorf(err, "create redis client to %s failed", master)
-		} else {
-			defer c.Close()
-			if err := c.BecomeMasterAllSlots(); err != nil {
-				log.WarnErrorf(err, "redis %s set master to NO:ONE failed", master)
-			}
-		}
-
 		g.Promoting.State = models.ActionFinished
 		if err := s.resyncSlotMappings(ctx, ctx.getSlotMappingsByGroupId(g.Id)...); err != nil {
 			log.Errorf("group-[%d] resync to finished failed", g.Id)
@@ -355,6 +494,17 @@ func (s *Topom) GroupPromoteServer(gid int, addr string) error {
 
 		defer s.dirtyGroupCache(g.Id)
 
+		log.Warnf("group-[%d] resync to finished", g.Id)
+
+		slots := models.SlotMappings(ctx.getSlotMappingsByGroupId(g.Id)).ToSlots()
+		for i, x := range g.Servers {
+			if i != 0 {
+				if err := s.SlaveOfMasterUnsafe(x.Addr, slots, pika.SlaveOfNonForce); err != nil {
+					log.Errorf("slaveof master failed for slave %s: %v", x.Addr, err)
+				}
+			}
+		}
+
 		g.ClearPromoting().OutOfSync = false
 		if err := s.resyncSlotMappings(ctx, ctx.getSlotMappingsByGroupId(g.Id)...); err != nil {
 			log.Errorf("group-[%d] resync to ActionNothing failed", g.Id)
@@ -363,14 +513,55 @@ func (s *Topom) GroupPromoteServer(gid int, addr string) error {
 		if err := s.storeUpdateGroup(g); err != nil {
 			return err
 		}
-		log.Warnf("group-[%d] resync to ActionNothing finished", g.Id)
+		log.Warnf("group-[%d] resync to ActionNothing done", g.Id)
 		return nil
 
 	default:
-
 		return errors.Errorf("group-[%d] action state is invalid", gid)
-
 	}
+}
+
+func (s *Topom) slaveLagsOK(ctx *context, g *models.Group, masterDown *bool, slaveAddr string, gap uint64,
+	createReplLinkIfNeeded bool, onLagOK func(slaveAddr string, needsCheckSlaveAliveness bool) error) error {
+	if *masterDown {
+		return onLagOK(slaveAddr, true) // if master is down, then is ok to promote
+	}
+
+	masterAddr := ctx.getGroupMaster(g.Id)
+	if masterAddr == "" {
+		*masterDown = true
+		return onLagOK(slaveAddr, true) // if master is down, then is ok to promote
+	}
+
+	masterSlotsInfo, err := s.action.redisp.GetPikaSlotsInfo(masterAddr)
+	if err != nil {
+		*masterDown = true
+		return onLagOK(slaveAddr, true) // if master is down, then is ok to promote
+	}
+
+	slots := ctx.getSlotMappingsByGroupId(g.Id)
+	for _, m := range slots {
+		masterSlotInfo, ok := masterSlotsInfo[m.Id]
+		if !ok {
+			return errors.Errorf("can't find master slot info for slot %d of group %d", m.Id, g.Id)
+		}
+		slaveReplInfo, slotErr := masterSlotInfo.FindSlaveReplInfo(slaveAddr)
+		if slotErr != nil {
+			if createReplLinkIfNeeded {
+				_ = s.action.redisp.SlaveOfAsync(masterAddr, slaveAddr, m.Id, false, false)
+			}
+			err = errors.Wrap(err, errors.Errorf("%v: slaveAddr:%s,slot:%d", slotErr, slaveAddr, m.Id))
+			continue
+		}
+		if slotErr := slaveReplInfo.GapReached(gap); slotErr != nil {
+			err = errors.Wrap(err, errors.Errorf("%v: slaveAddr:%s,slot:%d", slotErr, slaveAddr, m.Id))
+			continue
+		}
+	}
+	if err != nil {
+		return err
+	}
+	return onLagOK(slaveAddr, len(slots) == 0)
 }
 
 func (s *Topom) trySwitchGroupMaster(gid int, master string, cache *redis.InfoCache) error {

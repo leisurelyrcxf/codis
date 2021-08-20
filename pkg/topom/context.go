@@ -307,11 +307,15 @@ func (ctx *context) isGroupLocked(gid int) bool {
 		switch g.Promoting.State {
 		case models.ActionNothing:
 			return false
+		case models.ActionPending:
+			return false
 		case models.ActionPreparing:
 			return false
 		case models.ActionWatching:
 			return false
 		case models.ActionPrepared:
+			return true
+		case models.ActionPromoting:
 			return true
 		case models.ActionFinished:
 			return false

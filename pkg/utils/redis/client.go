@@ -795,7 +795,7 @@ func (p *Pool) GetPikaSlotsInfo(addr string) (slotsInfo map[int]pika.SlotInfo, _
 	})
 }
 
-func (p *Pool) GetPikasSlotInfo(addrs []string) map[string]map[int]pika.SlotInfo {
+func (p *Pool) GetPikasSlotsInfo(addrs []string) map[string]map[int]pika.SlotInfo {
 	if len(addrs) == 1 {
 		slotsInfo, err := p.GetPikaSlotsInfo(addrs[0])
 		if err != nil {

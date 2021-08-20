@@ -9,6 +9,7 @@ const (
 	ActionPreparing = "preparing"
 	ActionWatching  = "watching"
 	ActionPrepared  = "prepared"
+	ActionPromoting = "promoting"
 	ActionMigrating = "migrating"
 	ActionCleanup   = "cleanup"
 	ActionFinished  = "finished"
