@@ -246,11 +246,13 @@ func (s *Topom) CreateGroupPromoteAction(gid int, addr string) error {
 		if index != g.Promoting.Index {
 			return errors.Errorf("group-[%d] is promoting index = %d", g.Id, g.Promoting.Index)
 		}
-	} else {
-		if index == 0 {
-			return errors.Errorf("group-[%d] can't promote master", g.Id)
-		}
+		return nil
 	}
+
+	if index == 0 {
+		return errors.Errorf("group-[%d] can't promote master", g.Id)
+	}
+
 	if n := s.action.executor.Int64(); n != 0 {
 		return errors.Errorf("slots-migration is running = %d", n)
 	}
@@ -354,7 +356,7 @@ func (s *Topom) groupPromoteServer(gid int) error {
 		log.Warnf("group-[%d] resync to preparing", g.Id)
 
 		_ = s.slaveLagsOK(ctx, g, &masterDown, g.Servers[g.Promoting.Index].Addr,
-			math.MaxUint64, true, func(string, bool) error {
+			math.MaxUint64, !g.Promoting.CreatedReplLink, func(string, bool) error {
 				return nil
 			})
 
@@ -365,8 +367,13 @@ func (s *Topom) groupPromoteServer(gid int) error {
 			g.Promoting.State = models.ActionPreparing
 			s.resyncSlotMappings(ctx, slots...)
 			log.Warnf("group-[%d] resync-rollback to preparing, done", g.Id)
+
+			if g.Promoting.CreatedReplLink {
+				err = errors.Wrap(err, s.storeUpdateGroup(g)) // store the CreatedReplLink flag
+			}
 			return err
 		}
+
 		if err := s.storeUpdateGroup(g); err != nil {
 			return err
 		}
@@ -549,6 +556,7 @@ func (s *Topom) slaveLagsOK(ctx *context, g *models.Group, masterDown *bool, sla
 		if slotErr != nil {
 			if createReplLinkIfNeeded {
 				_ = s.action.redisp.SlaveOfAsync(masterAddr, slaveAddr, m.Id, false, false)
+				g.Promoting.CreatedReplLink = true
 			}
 			err = errors.Wrap(err, errors.Errorf("%v: slaveAddr:%s,slot:%d", slotErr, slaveAddr, m.Id))
 			continue
