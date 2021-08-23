@@ -3,7 +3,9 @@
 
 package models
 
-import "github.com/CodisLabs/codis/pkg/utils/errors"
+import (
+	"github.com/CodisLabs/codis/pkg/utils/errors"
+)
 
 const MaxGroupId = 9999
 
@@ -12,8 +14,9 @@ type Group struct {
 	Servers []*GroupServer `json:"servers"`
 
 	Promoting struct {
-		Index int    `json:"index,omitempty"`
-		State string `json:"state,omitempty"`
+		Index           int    `json:"index,omitempty"`
+		State           string `json:"state,omitempty"`
+		CreatedReplLink bool   `json:"created_repl_link"`
 	} `json:"promoting"`
 
 	OutOfSync bool `json:"out_of_sync"`
