@@ -1,8 +1,8 @@
 # Stage 1
 FROM golang:1.13
 
-RUN apt-get update
-RUN apt-get install -y autoconf
+RUN apt update
+RUN apt install -y autoconf
 
 ENV GOPATH /gopath
 ENV CODIS  ${GOPATH}/src/github.com/CodisLabs/codis

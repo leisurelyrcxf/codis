@@ -98,3 +98,10 @@ func Wrap(err1, err2 error) error {
 	}
 	return Errorf("%v: %v", err1, err2)
 }
+
+func Annotate(err error, annotation string) error {
+	if err == nil {
+		return nil
+	}
+	return Errorf("%v: %v", err, annotation)
+}

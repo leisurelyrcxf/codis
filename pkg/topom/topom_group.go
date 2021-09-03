@@ -5,7 +5,10 @@ package topom
 
 import (
 	"math"
+	"strings"
 	"time"
+
+	"github.com/CodisLabs/codis/pkg/utils"
 
 	"github.com/CodisLabs/codis/pkg/utils/pika"
 
@@ -14,6 +17,8 @@ import (
 	"github.com/CodisLabs/codis/pkg/utils/log"
 	"github.com/CodisLabs/codis/pkg/utils/redis"
 )
+
+const MsgErrorHappenedDuringGroupLocked = "error happened during group locked"
 
 func (s *Topom) CreateGroup(gid int) error {
 	s.mu.Lock()
@@ -225,6 +230,17 @@ func (s *Topom) GroupDelServer(gid int, addr string) error {
 }
 
 func (s *Topom) CreateGroupPromoteAction(gid int, addr string) error {
+	if err := s.createGroupPromoteAction(gid, addr); err != nil {
+		return err
+	}
+	select {
+	case s.sigGroupPromoteEvents <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (s *Topom) createGroupPromoteAction(gid int, addr string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -257,14 +273,11 @@ func (s *Topom) CreateGroupPromoteAction(gid int, addr string) error {
 		return errors.Errorf("slots-migration is running = %d", n)
 	}
 
+	defer s.dirtyGroupCache(g.Id)
+
 	g.Promoting.Index = index
 	g.Promoting.State = models.ActionPending
-
-	defer s.dirtyGroupCache(g.Id)
-	if err := s.storeUpdateGroup(g); err != nil {
-		return err
-	}
-	return nil
+	return s.storeUpdateGroup(g)
 }
 
 func (s *Topom) ProcessGroupPromoteAction() error {
@@ -309,7 +322,7 @@ func (s *Topom) GroupPromoteServer(gid int, addr string) error {
 	return errors.Errorf("discarded")
 }
 
-func (s *Topom) groupPromoteServer(gid int) error {
+func (s *Topom) groupPromoteServer(gid int) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -317,6 +330,12 @@ func (s *Topom) groupPromoteServer(gid int) error {
 	if err != nil {
 		return err
 	}
+
+	defer func() {
+		if err != nil && ctx.isGroupLocked(gid) {
+			err = errors.Annotate(err, MsgErrorHappenedDuringGroupLocked)
+		}
+	}()
 
 	g, err := ctx.getGroup(gid)
 	if err != nil {
@@ -410,7 +429,6 @@ func (s *Topom) groupPromoteServer(gid int) error {
 			return err
 		}
 
-		time.Sleep(time.Millisecond * 10)
 		fallthrough
 
 	case models.ActionPrepared:
@@ -418,14 +436,18 @@ func (s *Topom) groupPromoteServer(gid int) error {
 		defer s.dirtyGroupCache(g.Id)
 
 		log.Warnf("group-[%d] in state prepared", g.Id)
-		if err := s.slaveLagsOK(ctx, g, &masterDown, g.Servers[g.Promoting.Index].Addr, 0, false, func(slaveAddr string, _ bool) error {
-			return s.action.redisp.WithRedisClient(slaveAddr, func(c *redis.Client) error {
-				err := c.BecomeMasterAllSlots()
-				if err != nil {
-					log.WarnErrorf(err, "redis %s set master to NO:ONE failed", slaveAddr)
-				}
-				return err
+		if err := utils.WithRetryEx(time.Millisecond, time.Millisecond*100, func() error {
+			return s.slaveLagsOK(ctx, g, &masterDown, g.Servers[g.Promoting.Index].Addr, 0, false, func(slaveAddr string, _ bool) error {
+				return s.action.redisp.WithRedisClient(slaveAddr, func(c *redis.Client) error {
+					err := c.BecomeMasterAllSlots()
+					if err != nil {
+						log.WarnErrorf(err, "redis %s set master to NO:ONE failed", slaveAddr)
+					}
+					return err
+				})
 			})
+		}, func(err error) bool {
+			return strings.Contains(err.Error(), pika.ErrMsgLagNotMatch)
 		}); err != nil {
 			return err
 		}
