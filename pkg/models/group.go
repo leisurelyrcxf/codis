@@ -43,8 +43,9 @@ type GroupServer struct {
 
 func (g *Group) ClearPromoting() *Group {
 	g.Promoting = struct {
-		Index int    `json:"index,omitempty"`
-		State string `json:"state,omitempty"`
+		Index           int    `json:"index,omitempty"`
+		State           string `json:"state,omitempty"`
+		CreatedReplLink bool   `json:"created_repl_link"`
 	}{}
 	return g
 }

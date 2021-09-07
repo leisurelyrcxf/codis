@@ -102,6 +102,8 @@ type Topom struct {
 		monitor *redis.Sentinel
 		masters map[int]string
 	}
+
+	sigGroupPromoteEvents chan struct{}
 }
 
 var ErrClosedTopom = errors.New("use of closed topom")
@@ -115,6 +117,7 @@ func New(client models.Client, config *Config) (*Topom, error) {
 	}
 	s := &Topom{}
 	s.RoleState = common.NewRoleState()
+	s.sigGroupPromoteEvents = make(chan struct{}, 1)
 	s.config = config
 	s.exit.C = make(chan struct{})
 	s.action.redisp = redis.NewPool(config.ProductAuth, config.MigrationTimeout.Duration())
@@ -403,15 +406,21 @@ func (s *Topom) Start(routines bool) error {
 		for !s.IsClosed() {
 			if s.IsOnline() {
 				if err := s.ProcessGroupPromoteAction(); err != nil {
-					if strings.Contains(err.Error(), pika.ErrMsgLagNotMatch) {
+					if strings.Contains(err.Error(), MsgErrorHappenedDuringGroupLocked) {
+						log.WarnErrorf(err, "process group promotion action failed")
+						time.Sleep(time.Millisecond * 10)
+					} else if strings.Contains(err.Error(), pika.ErrMsgLagNotMatch) {
 						log.Infof("process group promotion lag not ok: %v", err)
 						time.Sleep(time.Millisecond * 100)
 					} else {
 						log.WarnErrorf(err, "process group promotion action failed")
-						time.Sleep(time.Second * 2)
+						time.Sleep(time.Second)
 					}
 				} else {
-					time.Sleep(time.Second)
+					select {
+					case <-time.After(time.Second * 2):
+					case <-s.sigGroupPromoteEvents:
+					}
 				}
 			}
 		}
