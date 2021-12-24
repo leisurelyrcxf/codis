@@ -53,3 +53,14 @@ func (g *Group) ClearPromoting() *Group {
 func (g *Group) Encode() []byte {
 	return jsonEncode(g)
 }
+
+func (g *Group) GetSlaves() []string {
+	slaveAddrs := make([]string, 0, len(g.Servers)-1)
+	for pid, server := range g.Servers {
+		if pid == 0 {
+			continue
+		}
+		slaveAddrs = append(slaveAddrs, server.Addr)
+	}
+	return slaveAddrs
+}

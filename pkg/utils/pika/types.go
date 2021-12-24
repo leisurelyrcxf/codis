@@ -287,7 +287,7 @@ func (ssi SlotsInfo) GetMaxLag(slots []int, slaveAddr string) (maxLag uint64, _ 
 			return math.MaxUint64, err
 		}
 		if maxLag = math2.MaxUInt64(maxLag, slotInfo.LagUnsafe(slaveAddr)); maxLag == math.MaxUint64 {
-			return
+			return maxLag, nil
 		}
 	}
 	return maxLag, nil
@@ -303,6 +303,15 @@ func (ssi SlotsInfo) GetMaxLags(slots []int, slaveAddrs []string) (slaveAddr2Max
 		slaveAddr2MaxLag[slaveAddr] = maxLag
 	}
 	return slaveAddr2MaxLag, nil
+}
+
+func (ssi SlotsInfo) GetMaxLagsUnsafe(slots []int, slaveAddrs []string) (slaveAddr2MaxLag map[string]uint64) {
+	slaveAddr2MaxLag = map[string]uint64{}
+	for _, slaveAddr := range slaveAddrs {
+		maxLag, _ := ssi.GetMaxLag(slots, slaveAddr)
+		slaveAddr2MaxLag[slaveAddr] = maxLag
+	}
+	return slaveAddr2MaxLag
 }
 
 func (ssi SlotsInfo) AllSlotsOf(pred func(SlotInfo) bool) bool {

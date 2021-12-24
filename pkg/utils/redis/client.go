@@ -6,6 +6,7 @@ package redis
 import (
 	"container/list"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"strconv"
@@ -733,6 +734,30 @@ func (p *Pool) Info(addr string) (_ map[string]string, err error) {
 	}
 	defer p.PutClient(c)
 	return c.Info()
+}
+
+func (p *Pool) InfoAll(addr string) (_ map[string]string, err error) {
+	m, err := p.InfoFull(addr)
+	if err != nil || m == nil || m["role"] != "master" {
+		return m, err
+	}
+
+	c, err := p.GetClient(addr)
+	if err != nil {
+		return nil, err
+	}
+	defer p.PutClient(c)
+
+	slotsInfo, err := c.PkSlotsInfo()
+	if err != nil {
+		return nil, err
+	}
+	slotsInfoBytes, err := json.Marshal(slotsInfo)
+	if err != nil {
+		return nil, err
+	}
+	m["slots_info"] = string(slotsInfoBytes)
+	return m, nil
 }
 
 func (p *Pool) InfoFull(addr string) (_ map[string]string, err error) {

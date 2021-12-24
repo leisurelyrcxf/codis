@@ -4,7 +4,12 @@
 package topom
 
 import (
+	"encoding/json"
+	"math"
+	"strconv"
 	"time"
+
+	"github.com/CodisLabs/codis/pkg/utils/pika"
 
 	"github.com/CodisLabs/codis/pkg/models"
 	"github.com/CodisLabs/codis/pkg/proxy"
@@ -65,7 +70,7 @@ func (s *Topom) RefreshRedisStats(timeout time.Duration) (*sync2.Future, error) 
 	for _, g := range ctx.group {
 		for _, x := range g.Servers {
 			goStats(x.Addr, func(addr string) (*RedisStats, error) {
-				m, err := s.stats.redisp.InfoFull(addr)
+				m, err := s.stats.redisp.InfoAll(addr)
 				if err != nil {
 					return nil, err
 				}
@@ -99,7 +104,55 @@ func (s *Topom) RefreshRedisStats(timeout time.Duration) (*sync2.Future, error) 
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
+
 		s.stats.servers = stats
+
+		ctx, err := s.newContext()
+		if err != nil {
+			return
+		}
+
+		addrToGroup := ctx.getAddrToGroup()
+		for addr, redisStats := range stats {
+			if redisStats.Stats == nil {
+				continue
+			}
+
+			g, ok := addrToGroup[addr]
+			if !ok {
+				continue
+			}
+
+			if g.PidInGroup == 0 {
+				redisStats.Stats["lag"] = "0"
+			} else {
+				redisStats.Stats["lag"] = strconv.FormatUint(math.MaxUint64, 10)
+			}
+		}
+
+		for addr, redisStats := range stats {
+			if redisStats.Stats == nil || redisStats.Stats["role"] != "master" {
+				continue
+			}
+
+			var slotsInfo pika.SlotsInfo
+			slotsInfoStr := redisStats.Stats["slots_info"]
+			if err := json.Unmarshal([]byte(slotsInfoStr), &slotsInfo); err != nil {
+				continue
+			}
+
+			g, ok := addrToGroup[addr]
+			if !ok {
+				continue
+			}
+			for slaveAddr, lag := range slotsInfo.GetMaxLagsUnsafe(ctx.getSlotsOfGroup(g.Id), g.GetSlaves()) {
+				if slaveStats := stats[slaveAddr]; slaveStats != nil && slaveStats.Stats != nil {
+					slaveStats.Stats["lag"] = strconv.FormatUint(lag, 10)
+				}
+			}
+
+			delete(redisStats.Stats, "slots_info")
+		}
 	}()
 	return &fut, nil
 }

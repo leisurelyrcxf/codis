@@ -56,6 +56,16 @@ func (ctx *context) getSlotMappingsByGroupId(gid int) []*models.SlotMapping {
 	return slots
 }
 
+func (ctx *context) getSlotsOfGroup(gid int) []int {
+	var slots = make([]int, 0, 4)
+	for _, m := range ctx.slots {
+		if m.GroupId == gid || m.Action.TargetId == gid {
+			slots = append(slots, m.Id)
+		}
+	}
+	return slots
+}
+
 func (ctx *context) maxSlotActionIndex() (maxIndex int) {
 	for _, m := range ctx.slots {
 		if m.Action.State != models.ActionNothing {
@@ -219,6 +229,25 @@ func (ctx *context) getGroupByServer(addr string) (*models.Group, int, error) {
 		}
 	}
 	return nil, -1, errors.Errorf("server-[%s] doesn't exist", addr)
+}
+
+func (ctx *context) getAddrToGroup() map[string]struct {
+	*models.Group
+	PidInGroup int
+} {
+	m := make(map[string]struct {
+		*models.Group
+		PidInGroup int
+	})
+	for _, g := range ctx.group {
+		for i, x := range g.Servers {
+			m[x.Addr] = struct {
+				*models.Group
+				PidInGroup int
+			}{Group: g, PidInGroup: i}
+		}
+	}
+	return m
 }
 
 func (ctx *context) maxSyncActionIndex() (maxIndex int) {
