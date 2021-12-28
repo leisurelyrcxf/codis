@@ -112,7 +112,7 @@ func TestReslaveOf(t *testing.T) {
 			return
 		}
 		now := time.Now()
-		masterDumpSSTCount, err := countSSTFile(fmt.Sprintf("/usr/local/codis-etcd/pika/pika-56382/dump/%s/db0/1/strings/", now.Format("20060102")))
+		masterDumpSSTCount, err := countSSTFile(fmt.Sprintf("/usr/local/codis-etcd/pika/pika-56380/dump/%s/db0/1/strings/", now.Format("20060102")))
 		if err != nil {
 			t.Error(err)
 			return
@@ -127,7 +127,7 @@ func TestReslaveOf(t *testing.T) {
 }
 
 func testReslaveOf(t *testing.T) (b bool) {
-	clientMaster, err := NewClient("127.0.0.1:56382", "", 60*time.Second)
+	clientMaster, err := NewClient("127.0.0.1:56380", "", 60*time.Second)
 	if err != nil {
 		t.Error(err.Error())
 		return

@@ -7,6 +7,7 @@ import (
 	"container/list"
 	gocontext "context"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -1088,6 +1089,7 @@ func (p *Topom) collectPrometheusMetrics() {
 			"used_memory_rss":            "5595136",
 			"db_size":                    "0",
 			"log_size":                   "0",
+			"lag":                        strconv.FormatUint(math.MaxUint64, 10),
 		}
 		pikaGauges = make(map[string]*prometheus.GaugeVec)
 		_          = gaugeCollector(NamespacePika, map[string]string{
